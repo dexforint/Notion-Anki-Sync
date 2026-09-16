@@ -4,7 +4,7 @@
 
 # Notion Anki Sync
 
-https://github.com/dexforint/Notion-Anki-Sync/raw/refs/heads/main/assets/demo.mp4
+https://github.com/user-attachments/assets/e958801c-2619-4110-a373-d1d0928564d3
 
 [English](README.md) · **Русский**
 
