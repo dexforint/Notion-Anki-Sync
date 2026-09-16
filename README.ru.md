@@ -4,7 +4,7 @@
 
 # Notion Anki Sync
 
-<video controls src="assets/demo.mp4" title="Title"></video>
+https://github.com/dexforint/Notion-Anki-Sync/raw/refs/heads/main/assets/demo.mp4
 
 [English](README.md) · **Русский**
 
