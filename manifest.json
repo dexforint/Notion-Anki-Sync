@@ -1,0 +1,57 @@
+{
+	"manifest_version": 1,
+	"name": "Notion Anki Sync",
+	"version": "0.1.0",
+	"icons": {
+		"16": "icons/icon16.png",
+		"32": "icons/icon32.png",
+		"48": "icons/icon48.png",
+		"128": "icons/icon128.png"
+	},
+	"description": "Sync Notion toggle blocks to Anki cards from the block menu.",
+	"permissions": ["storage", "alarms", "scripting", "tabs"],
+	"host_permissions": [
+		"https://api.notion.com/*",
+		"https://*.notion.so/*",
+		"https://notion.so/*",
+		"https://www.notion.so/*",
+		"https://*.notion.site/*",
+		"https://notion.site/*",
+		"https://*.notion.com/*",
+		"https://notion.com/*",
+		"https://www.notion.com/*",
+		"https://*.amazonaws.com/*",
+		"http://127.0.0.1:8765/*",
+		"http://localhost:8765/*"
+	],
+	"background": {
+		"service_worker": "background.js"
+	},
+	"action": {
+		"default_title": "Notion Anki Sync",
+		"default_popup": "popup.html",
+		"default_icon": {
+			"16": "icons/icon16.png",
+			"32": "icons/icon32.png"
+		}
+	},
+	"options_page": "options.html",
+	"content_scripts": [
+		{
+			"matches": [
+				"https://*.notion.so/*",
+				"https://notion.so/*",
+				"https://www.notion.so/*",
+				"https://*.notion.site/*",
+				"https://notion.site/*",
+				"https://*.notion.com/*",
+				"https://notion.com/*",
+				"https://www.notion.com/*"
+			],
+			"js": ["content.js"],
+			"css": ["content.css"],
+			"run_at": "document_idle",
+			"all_frames": true
+		}
+	]
+}

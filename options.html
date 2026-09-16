@@ -1,0 +1,45 @@
+<!doctype html>
+<html>
+
+<head>
+    <meta charset="utf-8" />
+    <title>Notion Anki Sync</title>
+    <link rel="stylesheet" href="options.css" />
+</head>
+
+<body>
+    <main>
+        <h1>Notion Anki Sync</h1>
+        <label>Notion Internal Integration Token
+            <input id="notionToken" type="password" autocomplete="off" />
+        </label>
+        <label>AnkiConnect URL
+            <input id="ankiUrl" type="text" />
+        </label>
+        <label>Default deck
+            <input id="deckName" type="text" />
+        </label>
+        <label>Tags (comma-separated)
+            <input id="tags" type="text" />
+        </label>
+        <label>Background sync interval (minutes)
+            <input id="intervalMinutes" type="number" min="5" />
+        </label>
+        <div class="row">
+            <button id="save">Save</button>
+            <button id="testNotion" type="button">Test Notion</button>
+            <button id="testAnki" type="button">Test Anki</button>
+        </div>
+        <p id="status"></p>
+        <ol class="help">
+            <li>Install Anki desktop and the AnkiConnect add-on (<code>2055492159</code>).</li>
+            <li>Create a Notion Internal Integration and copy the token.</li>
+            <li>Share every Notion page you want to sync with that integration.</li>
+            <li>Load this folder as an unpacked Chrome extension.</li>
+            <li>Open a toggle → 6 dots → Sync with Anki.</li>
+        </ol>
+    </main>
+    <script src="options.js"></script>
+</body>
+
+</html>

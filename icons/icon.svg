@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+    <defs>
+        <linearGradient id="g2" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#6366f1"/>
+            <stop offset="1" stop-color="#8b5cf6"/>
+        </linearGradient>
+    </defs>
+
+    <!-- Фон (не трогаем) -->
+    <rect width="128" height="128" rx="28" fill="url(#g2)"/>
+
+    <!-- Всё внутри увеличиваем -->
+    <g transform="translate(62 60) scale(1.25) translate(-62 -60)">
+        <!-- Задние карточки -->
+        <rect x="42" y="34" width="52" height="64" rx="10" fill="#c4b5fd" opacity="0.5"/>
+        <rect x="36" y="28" width="52" height="64" rx="10" fill="#ddd6fe" opacity="0.7"/>
+        <!-- Передняя карточка -->
+        <rect x="30" y="22" width="52" height="64" rx="10" fill="#fff"/>
+        <!-- Toggle треугольник + текст -->
+        <path d="M40 38 L40 52 L50 45 Z" fill="#6366f1"/>
+        <rect x="40" y="60" width="32" height="5" rx="2.5" fill="#c4b5fd"/>
+        <rect x="40" y="70" width="24" height="5" rx="2.5" fill="#ddd6fe"/>
+    </g>
+</svg>

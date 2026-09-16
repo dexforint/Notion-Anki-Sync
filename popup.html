@@ -1,0 +1,61 @@
+<!doctype html>
+<html>
+
+<head>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="popup.css" />
+</head>
+
+<body>
+    <header class="hero">
+        <img class="logo" src="icons/icon.svg" alt="" width="40" height="40" />
+        <div>
+            <h1>Notion Anki Sync</h1>
+            <p class="tagline">Toggles → Anki cards</p>
+        </div>
+    </header>
+
+    <section class="pills">
+        <span id="ankiPill" class="pill">Anki …</span>
+        <span id="tokenPill" class="pill">Token …</span>
+    </section>
+
+    <section class="stats">
+        <div>
+            <strong id="countNum">–</strong>
+            <span>synced</span>
+        </div>
+        <div>
+            <strong id="queueNum">–</strong>
+            <span>queued</span>
+        </div>
+    </section>
+
+    <button id="syncAll">Sync all now</button>
+    <p id="syncStatus" class="status" hidden></p>
+
+    <section class="cards-panel">
+        <div class="cards-head">
+            <h2>Tracked cards</h2>
+            <span id="cardsMeta" class="muted"></span>
+        </div>
+        <input id="cardSearch" type="search" placeholder="Search title or deck…" />
+        <div id="cardList" class="card-list"></div>
+        <p id="cardEmpty" class="empty" hidden>No tracked toggles yet. Sync one from Notion.</p>
+    </section>
+
+    <div class="footer">
+        <button id="options" class="link">Settings</button>
+    </div>
+
+    <details class="advanced">
+        <summary>Diagnostics</summary>
+        <p id="page">Page: …</p>
+        <p id="cs">Content script: …</p>
+        <button id="inject" class="ghost">Inject into this tab</button>
+    </details>
+
+    <script src="popup.js"></script>
+</body>
+
+</html>
