@@ -27,14 +27,8 @@ AnkiWeb and mobile get cards through normal Anki desktop sync. There is no publi
 1. Install [Anki](https://apps.ankiweb.net/) and [AnkiConnect](https://foosoft.net/projects/anki-connect/) (code `2055492159`). Keep Anki running while you sync.
 2. Notion → **Settings → Connections → Develop or manage integrations** → create an **Internal Integration** → copy the token.
 3. On each page you want to sync: **••• → Connections** → add that integration.
-4. Clone this repo and generate toolbar icons:
-
-   ```bash
-   python3 icons/generate-png.py
-   ```
-
-5. Chrome → `chrome://extensions` → **Developer mode** → **Load unpacked** → this folder.
-6. Extension **Settings**: paste the Notion token, **Test Notion** / **Test Anki**, save.
+4. Chrome → `chrome://extensions` → **Developer mode** → **Load unpacked** → this folder.
+5. Extension **Settings**: paste the Notion token, **Test Notion** / **Test Anki**, save.
 
 ## Usage
 
@@ -59,19 +53,6 @@ On the second PC:
 3. Open Notion → **Sync all now**.
 
 The pending queue exists only on the machine that created it (Anki was closed there).
-
-## Icon
-
-Toggle chevron + two cards (`#1e3a8a` / `#2563eb`). Source: `icons/icon.svg`. Chrome toolbar uses PNG:
-
-```bash
-python3 icons/generate-png.py
-```
-
-| File                               | Use            |
-| ---------------------------------- | -------------- |
-| `icons/icon.svg`                   | README, popup  |
-| `icons/icon16.png` … `icon128.png` | Chrome toolbar |
 
 ## Privacy
 

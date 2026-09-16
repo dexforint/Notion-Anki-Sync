@@ -27,14 +27,8 @@ AnkiWeb и телефон получают карточки обычной си�
 1. [Anki](https://apps.ankiweb.net/) и [AnkiConnect](https://foosoft.net/projects/anki-connect/) (код `2055492159`). Anki лучше держать запущенным.
 2. Notion → **Settings → Connections → Develop or manage integrations** → **Internal Integration** → скопируйте токен.
 3. На каждой нужной странице: **••• → Connections** → добавьте интеграцию.
-4. Клонируйте репозиторий и соберите иконки панели:
-
-   ```bash
-   python3 icons/generate-png.py
-   ```
-
-5. Chrome → `chrome://extensions` → **Режим разработчика** → **Загрузить распакованное** → папка проекта.
-6. **Настройки** расширения: вставьте токен, **Test Notion** / **Test Anki**, сохраните.
+4. Chrome → `chrome://extensions` → **Режим разработчика** → **Загрузить распакованное** → папка проекта.
+5. **Настройки** расширения: вставьте токен, **Test Notion** / **Test Anki**, сохраните.
 
 ## Использование
 
@@ -59,19 +53,6 @@ AnkiWeb и телефон получают карточки обычной си�
 3. Notion → **Sync all now**.
 
 Очередь «Anki был закрыт» существует только на том компьютере, где её создали.
-
-## Иконка
-
-Шеврон toggle и две карточки. Исходник: `icons/icon.svg`. Для панели Chrome нужны PNG:
-
-```bash
-python3 icons/generate-png.py
-```
-
-| Файл                               | Зачем             |
-| ---------------------------------- | ----------------- |
-| `icons/icon.svg`                   | README, попап     |
-| `icons/icon16.png` … `icon128.png` | иконка расширения |
 
 ## Приватность
 
