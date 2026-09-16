@@ -4,6 +4,8 @@
 
 # Notion Anki Sync
 
+<video controls src="assets/demo.mp4" title="Title"></video>
+
 [English](README.md) · **Русский**
 
 Расширение Chrome: **toggle** в Notion → карточка Anki из меню блока (шесть точек).

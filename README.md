@@ -4,6 +4,8 @@
 
 # Notion Anki Sync
 
+<video controls src="assets/demo.mp4" title="Title"></video>
+
 **English** · [Русский](README.ru.md)
 
 Chrome extension that turns a Notion **toggle** into an Anki card from the block handle (six dots).
