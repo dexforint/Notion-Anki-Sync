@@ -329,3 +329,12 @@
 .nas-badge-error {
 	outline: 2px solid #b42318;
 }
+
+.nas-tags-option.is-selected .nas-tag-name {
+	font-weight: 650;
+}
+.nas-tag-check {
+	flex: 0 0 auto;
+	color: #0f7b6c;
+	font-weight: 800;
+}

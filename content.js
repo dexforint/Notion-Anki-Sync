@@ -191,6 +191,9 @@
 		pickerOpen = false;
 		tagMenuOpen = false;
 		renamingFrom = "";
+		tagHighlight = 0;
+		const input = tagInputEl();
+		if (input) input.value = "";
 		if (pickerEl) {
 			pickerEl.style.display = "none";
 			pickerEl.dataset.tagsReady = "";
@@ -203,6 +206,11 @@
 
 	function closeTagMenu() {
 		tagMenuOpen = false;
+		if (renamingFrom) {
+			renamingFrom = "";
+			const input = tagInputEl();
+			if (input) input.value = "";
+		}
 		renderTagMenu();
 	}
 
@@ -444,7 +452,6 @@
 		const prefix = [];
 		const rest = [];
 		for (const t of allKnownTags()) {
-			if (selected.has(t)) continue;
 			const low = t.toLowerCase();
 			if (!q) {
 				rest.push(t);
@@ -455,9 +462,13 @@
 		}
 		prefix.sort((a, b) => a.localeCompare(b));
 		rest.sort((a, b) => a.localeCompare(b));
-		const matches = [...prefix, ...rest].slice(0, 20).map((value) => ({ value, create: false }));
-		const exact = selected.has(q) || allKnownTags().some((t) => t.toLowerCase() === q);
-		if (q && !exact) matches.push({ value: q, create: true });
+		const matches = [...prefix, ...rest].slice(0, 20).map((value) => ({
+			value,
+			create: false,
+			selected: selected.has(value),
+		}));
+		const exact = allKnownTags().some((t) => t.toLowerCase() === q);
+		if (q && !exact) matches.push({ value: q, create: true, selected: false });
 		return matches;
 	}
 
@@ -496,9 +507,11 @@
               <button type="button" class="nas-tag-rename" data-tag="${escapeAttr(item.value)}" title="${ru ? "Переименовать" : "Rename"}">✎</button>
               <button type="button" class="nas-tag-forget" data-tag="${escapeAttr(item.value)}" title="${ru ? "Удалить тег везде" : "Delete tag everywhere"}">×</button>
             </span>`;
-				return `<div class="nas-tags-option${idx === tagHighlight ? " is-active" : ""}" data-index="${idx}" data-tag="${escapeAttr(item.value)}">
+				const check = item.selected ? `<span class="nas-tag-check" title="${ru ? "Уже выбран" : "Selected"}">✓</span>` : "";
+				return `<div class="nas-tags-option${idx === tagHighlight ? " is-active" : ""}${item.selected ? " is-selected" : ""}" data-index="${idx}" data-tag="${escapeAttr(item.value)}">
           <span class="nas-tag-dot" style="background:${bg};color:${fg}">${escapeHtml(item.value.slice(0, 1).toUpperCase())}</span>
           <span class="nas-tag-name">${label}</span>
+          ${check}
           ${tools}
         </div>`;
 			})
@@ -514,7 +527,11 @@
 				if (e.target.closest(".nas-tag-tools")) return;
 				e.preventDefault();
 				e.stopPropagation();
-				addTag(row.getAttribute("data-tag"));
+				const idx = Number(row.getAttribute("data-index"));
+				const item = items[idx];
+				const value = row.getAttribute("data-tag");
+				if (item?.selected) removeTag(value);
+				else addTag(value);
 				tagInputEl()?.focus();
 			});
 		});
@@ -583,8 +600,10 @@
 		if (!sameCard) {
 			el.querySelector(".nas-picker-hint").textContent = ru ? "Загрузка колод…" : "Loading decks…";
 			el.querySelector(".nas-picker-input").value = "";
+			el.querySelector(".nas-tags-input").value = "";
 			el.dataset.tagsReady = "";
 			tagMenuOpen = false;
+			tagHighlight = 0;
 			renamingFrom = "";
 			selectedTags = synced ? sanitizeList(cardsCache[id]?.tags) : [];
 			renderTagChips();

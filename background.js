@@ -294,7 +294,11 @@ async function syncBlock(blockId, options = {}) {
 	if (options.deckName || Array.isArray(options.tags)) {
 		const patch = { ...settings };
 		if (options.deckName) patch.lastDeckName = options.deckName;
-		if (Array.isArray(options.tags)) patch.lastTags = tags;
+		if (Array.isArray(options.tags)) {
+			patch.lastTags = tags;
+			const live = new Set(tags);
+			patch.hiddenTags = (settings.hiddenTags || []).filter((t) => !live.has(t));
+		}
 		await saveSettings(patch);
 	}
 	return { ok: true, action: prev?.noteId ? "updated" : "created", noteId, status: "synced", deckName };
@@ -504,6 +508,17 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 	return true;
 });
 
+async function buildTagPayload() {
+	const { settings, cards } = await getState();
+	const hidden = new Set(settings.hiddenTags || []);
+	const used = new Set([...(settings.lastTags || []), ...parseTags(settings.tags), ...Object.values(cards).flatMap((c) => c.tags || [])]);
+	return {
+		tags: [...used].filter((t) => t && !hidden.has(t)).sort((a, b) => a.localeCompare(b)),
+		defaultTags: (settings.lastTags?.length ? sanitizeTags(settings.lastTags) : parseTags(settings.tags)).filter((t) => !hidden.has(t)),
+		hiddenTags: [...hidden],
+	};
+}
+
 async function forgetTag(tag) {
 	const t = sanitizeTags([tag])[0];
 	if (!t) return { ok: true, tags: [] };
@@ -531,7 +546,7 @@ async function forgetTag(tag) {
 			}
 		}
 	}
-	return { ok: true, tags: lastTags, hiddenTags };
+	return { ok: true, ...(await buildTagPayload()) };
 }
 
 async function renameTag(from, to) {
@@ -564,7 +579,7 @@ async function renameTag(from, to) {
 			}
 		}
 	}
-	return { ok: true, tags: lastTags, hiddenTags };
+	return { ok: true, ...(await buildTagPayload()) };
 }
 
 async function handleMessage(msg) {
@@ -597,7 +612,9 @@ async function handleMessage(msg) {
 			const { settings, cards } = await getState();
 			const fallbackDefault = settings.deckName || "Default";
 			const used = new Set([...(settings.lastTags || []), ...parseTags(settings.tags), ...Object.values(cards).flatMap((c) => c.tags || [])]);
-			const hidden = new Set(settings.hiddenTags || []);
+			const onCards = new Set(Object.values(cards).flatMap((c) => c.tags || []));
+			// «Скрытый» тег, который реально стоит на карточке, противоречив — показываем его снова
+			const hidden = new Set((settings.hiddenTags || []).filter((t) => !onCards.has(t)));
 			const usedTags = [...used].filter((t) => t && !hidden.has(t)).sort((a, b) => a.localeCompare(b));
 			const defaultTags = (settings.lastTags?.length ? sanitizeTags(settings.lastTags) : parseTags(settings.tags)).filter((t) => !hidden.has(t));
 			try {

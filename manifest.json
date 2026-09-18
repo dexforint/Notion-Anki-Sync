@@ -1,25 +1,24 @@
 {
 	"manifest_version": 3,
 	"name": "Notion Anki Sync",
-	"version": "0.1.0",
+	"version": "0.2.0",
+	"description": "Sync Notion toggle blocks to Anki cards from the block menu.",
+	"minimum_chrome_version": "111",
 	"icons": {
 		"16": "icons/icon16.png",
 		"32": "icons/icon32.png",
 		"48": "icons/icon48.png",
 		"128": "icons/icon128.png"
 	},
-	"description": "Sync Notion toggle blocks to Anki cards from the block menu.",
 	"permissions": ["storage", "alarms", "scripting", "tabs"],
 	"host_permissions": [
 		"https://api.notion.com/*",
-		"https://*.notion.so/*",
 		"https://notion.so/*",
-		"https://www.notion.so/*",
-		"https://*.notion.site/*",
+		"https://*.notion.so/*",
 		"https://notion.site/*",
-		"https://*.notion.com/*",
+		"https://*.notion.site/*",
 		"https://notion.com/*",
-		"https://www.notion.com/*",
+		"https://*.notion.com/*",
 		"https://*.amazonaws.com/*",
 		"http://127.0.0.1:8765/*",
 		"http://localhost:8765/*"
@@ -39,14 +38,26 @@
 	"content_scripts": [
 		{
 			"matches": [
-				"https://*.notion.so/*",
 				"https://notion.so/*",
-				"https://www.notion.so/*",
-				"https://*.notion.site/*",
+				"https://*.notion.so/*",
 				"https://notion.site/*",
-				"https://*.notion.com/*",
+				"https://*.notion.site/*",
 				"https://notion.com/*",
-				"https://www.notion.com/*"
+				"https://*.notion.com/*"
+			],
+			"js": ["page-guard.js"],
+			"run_at": "document_start",
+			"all_frames": true,
+			"world": "MAIN"
+		},
+		{
+			"matches": [
+				"https://notion.so/*",
+				"https://*.notion.so/*",
+				"https://notion.site/*",
+				"https://*.notion.site/*",
+				"https://notion.com/*",
+				"https://*.notion.com/*"
 			],
 			"js": ["content.js"],
 			"css": ["content.css"],
@@ -58,14 +69,12 @@
 		{
 			"resources": ["icons/icon.svg"],
 			"matches": [
-				"https://*.notion.so/*",
 				"https://notion.so/*",
-				"https://www.notion.so/*",
-				"https://*.notion.site/*",
+				"https://*.notion.so/*",
 				"https://notion.site/*",
-				"https://*.notion.com/*",
+				"https://*.notion.site/*",
 				"https://notion.com/*",
-				"https://www.notion.com/*"
+				"https://*.notion.com/*"
 			]
 		}
 	]
