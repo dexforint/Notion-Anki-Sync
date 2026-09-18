@@ -33,7 +33,7 @@
 	left: 12px;
 	bottom: 12px;
 	pointer-events: none;
-	background: #2e69ff;
+	background: #1e3a8a;
 	color: #fff;
 	padding: 6px 10px;
 	border-radius: 8px;
@@ -103,7 +103,7 @@
 	color: #37352f;
 }
 .nas-picker-ok {
-	background: #2e69ff;
+	background: #2563eb;
 	color: #fff;
 }
 .nas-picker-unsync {
@@ -112,21 +112,67 @@
 	margin-right: auto;
 }
 
+.nas-title-btn {
+	pointer-events: auto;
+	position: fixed;
+	height: 32px;
+	display: none;
+	align-items: center;
+	gap: 8px;
+	border: 0;
+	border-radius: 999px;
+	padding: 0 12px 0 6px;
+	background: #fff;
+	color: #4f46e5;
+	box-shadow:
+		0 0 0 1px rgba(99, 102, 241, 0.22),
+		0 8px 20px rgba(99, 102, 241, 0.16);
+	cursor: pointer;
+	font:
+		12px/1 ui-sans-serif,
+		system-ui,
+		sans-serif;
+	font-weight: 750;
+	letter-spacing: 0.01em;
+}
+.nas-title-btn .nas-icon,
+.nas-badge .nas-icon {
+	width: 20px;
+	height: 20px;
+	display: block;
+	flex: 0 0 auto;
+	border-radius: 5px;
+}
+.nas-title-btn:hover {
+	background: #eef2ff;
+}
+.nas-title-btn-synced {
+	background: linear-gradient(135deg, #6366f1, #8b5cf6);
+	color: #fff;
+	box-shadow:
+		0 0 0 1px rgba(99, 102, 241, 0.45),
+		0 10px 24px rgba(139, 92, 246, 0.35);
+}
+.nas-title-btn-synced:hover {
+	filter: brightness(1.05);
+}
+
 .nas-badge {
 	pointer-events: none;
 	position: fixed;
-	width: 18px;
-	height: 18px;
-	border-radius: 4px;
-	background: rgba(255, 255, 255, 0.92);
+	width: 20px;
+	height: 20px;
+	border-radius: 6px;
+	overflow: hidden;
 	box-shadow: 0 0 0 1px rgba(15, 15, 15, 0.08);
 	display: none;
 	align-items: center;
 	justify-content: center;
+	background: transparent;
 }
 .nas-badge-pending {
 	opacity: 0.45;
 }
 .nas-badge-error {
-	background: #fdebec;
+	outline: 2px solid #b42318;
 }

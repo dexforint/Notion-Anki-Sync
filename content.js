@@ -2,8 +2,36 @@
 	if (window.__NAS_LOADED__) return;
 	window.__NAS_LOADED__ = true;
 
-	const MENU_MARKERS_EN = ["Turn into", "Duplicate", "Delete"];
-	const MENU_MARKERS_RU = ["Превратить", "Дублировать", "Удалить"];
+	function iconImg(size) {
+		const url = chrome.runtime.getURL("icons/icon.svg");
+		return `<img class="nas-icon" src="${url}" width="${size}" height="${size}" alt="" draggable="false">`;
+	}
+
+	const MENU_HINTS = [
+		"Turn into",
+		"Duplicate",
+		"Delete",
+		"Color",
+		"Copy link",
+		"Move to",
+		"Comment",
+		"Open",
+		"Open in",
+		"Rename",
+		"Add to",
+		"Favorite",
+		"Search actions",
+		"Превратить",
+		"Дублировать",
+		"Удалить",
+		"Цвет",
+		"Копировать",
+		"Переместить",
+		"Комментар",
+		"Открыть",
+		"Переименовать",
+		"Поиск действий",
+	];
 
 	let lastBlockId = null;
 	let lastHoveredBlockId = null;
@@ -12,6 +40,8 @@
 	let rafId = 0;
 	let pickerEl = null;
 	let pickerOpen = false;
+	let pickerSource = null;
+	let titleBtn = null;
 	let badgeMap = new Map();
 	let badgeRaf = 0;
 
@@ -63,7 +93,7 @@
 			const id = findBlockIdFromNode(el);
 			if (id) return id;
 		}
-		for (const dx of [24, 48, 80, 120]) {
+		for (const dx of [16, 32, 48, 72, 96, 128, 168]) {
 			const extra = document.elementsFromPoint(x + dx, y) || [];
 			for (const el of extra) {
 				const id = findBlockIdFromNode(el);
@@ -77,6 +107,17 @@
 		return lastBlockId || lastHoveredBlockId;
 	}
 
+	function findPageTitleBlock() {
+		const leaf = document.querySelector('[aria-roledescription="page title"]');
+		return leaf?.closest("[data-block-id]") || null;
+	}
+
+	function pageTitleId() {
+		const block = findPageTitleBlock();
+		const raw = block?.getAttribute("data-block-id");
+		return raw && isUuidLike(raw) ? normalizeBlockId(raw) : null;
+	}
+
 	function findBlockEl(id) {
 		const dashed = normalizeBlockId(id);
 		const hex = dashed.replace(/-/g, "");
@@ -88,7 +129,7 @@
 		let bestArea = 0;
 		for (const el of nodes) {
 			const r = el.getBoundingClientRect();
-			if (r.width < 120 || r.height < 18) continue;
+			if (r.width < 80 || r.height < 16) continue;
 			const area = r.width * r.height;
 			if (area > bestArea) {
 				best = el;
@@ -115,22 +156,34 @@
 		setTimeout(() => el.remove(), 3200);
 	}
 
+	function isRuUi(node) {
+		const text = `${node?.textContent || ""} ${document.documentElement.lang || ""}`;
+		return /Удалить|Дублировать|Превратить|Открыть|Копировать/.test(text);
+	}
+
 	function isBlockMenu(node) {
 		if (!node || node.id === "nas-root") return false;
-		if (!node.querySelector?.('[role="option"], [role="menuitem"]')) return false;
+		const options = node.querySelectorAll('[role="option"], [role="menuitem"]');
+		if (options.length < 2) return false;
 		const text = node.textContent || "";
-		return MENU_MARKERS_EN.every((m) => text.includes(m)) || MENU_MARKERS_RU.every((m) => text.includes(m));
+		if (/Search actions|Search for an action|Поиск действий/i.test(text)) return true;
+		const hits = MENU_HINTS.filter((m) => text.includes(m)).length;
+		return hits >= 2;
 	}
 
 	function findBlockMenu() {
-		for (const d of document.querySelectorAll('[role="dialog"]')) {
-			if (isBlockMenu(d)) return d;
+		const nodes = document.querySelectorAll('[role="dialog"], [role="menu"], [role="listbox"]');
+		for (const node of nodes) {
+			const rootMenu = node.closest('[role="dialog"]') || node;
+			if (isBlockMenu(rootMenu)) return rootMenu;
 		}
 		return null;
 	}
 
-	function menuLanguage(node) {
-		return /Удалить|Превратить|Дублировать/.test(node?.textContent || "") ? "ru" : "en";
+	function blockIdNearMenu(dialog) {
+		const rect = dialog.getBoundingClientRect();
+		const y = rect.top + Math.min(24, Math.max(8, rect.height / 2));
+		return findBlockIdFromPoint(rect.left - 12, y) || findBlockIdFromPoint(rect.left - 40, y) || findBlockIdFromPoint(rect.left + 8, y);
 	}
 
 	function closeNotionMenu() {
@@ -147,6 +200,7 @@
 
 	function hidePicker() {
 		pickerOpen = false;
+		pickerSource = null;
 		if (pickerEl) pickerEl.style.display = "none";
 	}
 
@@ -197,20 +251,24 @@
 
 	function positionPanel(el, rect) {
 		el.style.display = "block";
-		el.style.left = `${Math.max(8, rect.left)}px`;
-		el.style.width = `${Math.max(260, rect.width)}px`;
+		el.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - 280))}px`;
+		el.style.width = `${Math.max(260, Math.min(rect.width || 280, 360))}px`;
 		const height = el.offsetHeight || 180;
-		let top = rect.top - height - 8;
-		if (top < 8) top = Math.min(window.innerHeight - height - 8, rect.bottom + 8);
+		let top = rect.bottom + 8;
+		if (top + height > window.innerHeight - 8) {
+			top = Math.max(8, rect.top - height - 8);
+		}
 		el.style.top = `${top}px`;
 	}
 
-	function showPicker(blockId, dialog) {
+	function showPicker(blockId, anchor, source) {
 		const el = ensurePicker();
 		const id = normalizeBlockId(blockId);
 		const synced = Boolean(cardsCache[id]);
-		const ru = menuLanguage(dialog) === "ru";
+		const ru = isRuUi(anchor);
+		const rect = anchor.getBoundingClientRect ? anchor.getBoundingClientRect() : anchor;
 		pickerOpen = true;
+		pickerSource = source || "menu";
 		el.dataset.blockId = id;
 		el.querySelector(".nas-picker-title").textContent = synced
 			? ru
@@ -219,14 +277,14 @@
 			: ru
 				? "Синхронизировать с Anki"
 				: "Sync with Anki";
-		el.querySelector(".nas-picker-ok").textContent = synced ? (ru ? "Обновить" : "Update") : ru ? "Sync" : "Sync";
+		el.querySelector(".nas-picker-ok").textContent = synced ? (ru ? "Обновить" : "Update") : "Sync";
 		el.querySelector(".nas-picker-cancel").textContent = ru ? "Отмена" : "Cancel";
 		el.querySelector(".nas-picker-unsync").textContent = ru ? "Отвязать" : "Unsync";
 		el.querySelector(".nas-picker-unsync").style.display = synced ? "inline-flex" : "none";
 		el.querySelector(".nas-picker-input").placeholder = ru ? "Или введите новую колоду" : "Or type a new deck name";
 		el.querySelector(".nas-picker-hint").textContent = ru ? "Загрузка колод…" : "Loading decks…";
 		el.querySelector(".nas-picker-input").value = "";
-		positionPanel(el, dialog.getBoundingClientRect());
+		positionPanel(el, rect);
 
 		chrome.runtime.sendMessage({ type: "GET_DECKS" }, (res) => {
 			if (!pickerOpen || el.dataset.blockId !== id) return;
@@ -248,7 +306,7 @@
 				: ru
 					? "Anki закрыт. Список колод может быть неполным."
 					: "Anki is closed. Deck list may be incomplete.";
-			positionPanel(el, dialog.getBoundingClientRect());
+			positionPanel(el, rect);
 		});
 	}
 
@@ -278,17 +336,75 @@
 		});
 	}
 
+	function ensureTitleBtn() {
+		if (titleBtn) return titleBtn;
+		titleBtn = document.createElement("button");
+		titleBtn.type = "button";
+		titleBtn.className = "nas-title-btn";
+		titleBtn.innerHTML = `${iconImg(20)}<span class="nas-title-btn-label"></span>`;
+		root.appendChild(titleBtn);
+		const stop = (e) => {
+			e.preventDefault();
+			e.stopPropagation();
+		};
+		titleBtn.addEventListener("pointerdown", stop, true);
+		titleBtn.addEventListener("mousedown", stop, true);
+		titleBtn.addEventListener(
+			"click",
+			(e) => {
+				stop(e);
+				const id = titleBtn.dataset.blockId || pageTitleId();
+				if (!id) {
+					showToast("Не удалось определить страницу Notion.", "err");
+					return;
+				}
+				lastBlockId = id;
+				showPicker(id, titleBtn, "title");
+			},
+			true,
+		);
+		return titleBtn;
+	}
+
+	function updateTitleButton() {
+		const block = findPageTitleBlock();
+		const leaf = document.querySelector('[aria-roledescription="page title"]');
+		if (!block || !leaf) {
+			if (titleBtn) titleBtn.style.display = "none";
+			return;
+		}
+		const id = normalizeBlockId(block.getAttribute("data-block-id"));
+		const synced = Boolean(cardsCache[id]);
+		const ru = isRuUi();
+		const btn = ensureTitleBtn();
+		btn.dataset.blockId = id;
+		btn.style.display = "flex";
+		btn.classList.toggle("nas-title-btn-synced", synced);
+		const label = btn.querySelector(".nas-title-btn-label");
+		if (synced) {
+			const deck = cardsCache[id]?.deckName;
+			label.textContent = ru ? "В Anki" : "Synced";
+			btn.title = deck ? (ru ? `Страница в Anki → ${deck}` : `Page synced → ${deck}`) : ru ? "Страница синхронизирована с Anki" : "Page synced with Anki";
+		} else {
+			label.textContent = ru ? "В Anki" : "Sync page";
+			btn.title = ru ? "Синхронизировать страницу с Anki" : "Sync this page with Anki";
+		}
+		const trect = leaf.getBoundingClientRect();
+		const height = 32;
+		let left = trect.right + 10;
+		const width = btn.offsetWidth || 120;
+		if (left + width > window.innerWidth - 12) left = Math.max(8, window.innerWidth - width - 12);
+		const top = Math.max(8, trect.top + (trect.height - height) / 2);
+		btn.style.left = `${left}px`;
+		btn.style.top = `${top}px`;
+	}
+
 	function ensureBadge(id) {
 		let badge = badgeMap.get(id);
 		if (badge) return badge;
 		badge = document.createElement("div");
 		badge.className = "nas-badge";
-		badge.innerHTML = `
-      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-        <rect x="1" y="3" width="10" height="12" rx="1.5" fill="#26408b"></rect>
-        <rect x="5" y="1" width="10" height="12" rx="1.5" fill="#4a6cf7"></rect>
-      </svg>
-    `;
+		badge.innerHTML = iconImg(20);
 		root.appendChild(badge);
 		badgeMap.set(id, badge);
 		return badge;
@@ -296,13 +412,16 @@
 
 	function updateBadges() {
 		badgeRaf = 0;
+		updateTitleButton();
 		const ids = Object.keys(cardsCache || {});
 		const used = new Set();
+		const titleId = pageTitleId();
 		for (const id of ids) {
+			if (titleId && id === titleId) continue;
 			const el = findBlockEl(id);
 			if (!el) continue;
 			const rect = el.getBoundingClientRect();
-			if (rect.width < 120 || rect.height < 18) continue;
+			if (rect.width < 80 || rect.height < 16) continue;
 			if (rect.bottom < 0 || rect.top > window.innerHeight + 40) continue;
 			const badge = ensureBadge(id);
 			const status = cardsCache[id]?.status;
@@ -315,12 +434,12 @@
 					: status === "error"
 						? cardsCache[id]?.error || "Sync error"
 						: `Synced with Anki${deck ? ` → ${deck}` : ""}`;
-			const size = 18;
-			const left = Math.min(rect.right - size - 10, window.innerWidth - size - 8);
-			if (left < rect.left + 48) continue;
+			const size = 20;
+			const left = Math.min(rect.right - size - 8, window.innerWidth - size - 8);
+			if (left < rect.left + 52) continue;
 			badge.style.display = "flex";
-			badge.style.left = `${Math.max(rect.left + 48, left)}px`;
-			badge.style.top = `${Math.max(8, rect.top + 6)}px`;
+			badge.style.left = `${Math.max(rect.left + 52, left)}px`;
+			badge.style.top = `${Math.max(8, rect.top + 4)}px`;
 			used.add(id);
 		}
 		for (const [id, badge] of badgeMap) {
@@ -338,20 +457,26 @@
 	function tick() {
 		rafId = 0;
 		const dialog = findBlockMenu();
-		const rawId = currentBlockId();
-		if (dialog && rawId) {
-			const id = normalizeBlockId(rawId);
-			if (!pickerOpen || pickerEl?.dataset.blockId !== id) showPicker(id, dialog);
-			else positionPanel(pickerEl, dialog.getBoundingClientRect());
-			watchUntil = Date.now() + 1500;
-		} else if (!dialog && pickerOpen) {
+		if (dialog) {
+			const rawId = currentBlockId() || blockIdNearMenu(dialog);
+			if (rawId) {
+				lastBlockId = rawId;
+				const id = normalizeBlockId(rawId);
+				if (!pickerOpen || pickerEl?.dataset.blockId !== id || pickerSource !== "menu") {
+					showPicker(id, dialog, "menu");
+				} else {
+					positionPanel(pickerEl, dialog.getBoundingClientRect());
+				}
+			}
+			watchUntil = Date.now() + 2000;
+		} else if (pickerOpen && pickerSource === "menu") {
 			hidePicker();
 		}
 		if (Date.now() < watchUntil) rafId = requestAnimationFrame(tick);
 	}
 
 	function startWatch() {
-		watchUntil = Date.now() + 4000;
+		watchUntil = Date.now() + 5000;
 		if (!rafId) rafId = requestAnimationFrame(tick);
 	}
 
@@ -367,6 +492,7 @@
 		"pointerdown",
 		(e) => {
 			if (e.target?.closest?.("#nas-root")) return;
+			if (pickerOpen && pickerSource === "title") hidePicker();
 			const id = findBlockIdFromNode(e.target) || findBlockIdFromPoint(e.clientX, e.clientY);
 			if (id) {
 				lastBlockId = id;
@@ -390,7 +516,7 @@
 
 	chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 		if (msg?.type === "PING") {
-			sendResponse({ ok: true, href: location.href, blockId: currentBlockId() });
+			sendResponse({ ok: true, href: location.href, blockId: currentBlockId() || pageTitleId() });
 		}
 	});
 
