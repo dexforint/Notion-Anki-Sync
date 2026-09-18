@@ -183,6 +183,11 @@ $("inject").onclick = async () => {
 		});
 		await chrome.scripting.executeScript({
 			target: { tabId: tab.id, allFrames: true },
+			world: "MAIN",
+			files: ["page-guard.js"],
+		});
+		await chrome.scripting.executeScript({
+			target: { tabId: tab.id, allFrames: true },
 			files: ["content.js"],
 		});
 		$("cs").textContent = "Content script: injected, pinging…";

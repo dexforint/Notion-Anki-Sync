@@ -26,6 +26,7 @@ function mergeSettings(sSync, sLocal) {
 	if (!sLocal.deckName && sSync.deckName) merged.deckName = sSync.deckName;
 	if (!sLocal.tags && sSync.tags) merged.tags = sSync.tags;
 	if (!sLocal.lastDeckName && sSync.lastDeckName) merged.lastDeckName = sSync.lastDeckName;
+	if (!sLocal.lastTags && sSync.lastTags) merged.lastTags = sSync.lastTags;
 	if (sLocal.intervalMinutes == null && sSync.intervalMinutes != null) {
 		merged.intervalMinutes = sSync.intervalMinutes;
 	}
@@ -64,6 +65,35 @@ function parseTags(str) {
 		.split(/[,\s]+/)
 		.map((t) => t.trim())
 		.filter(Boolean);
+}
+
+function sanitizeTags(list) {
+	return [
+		...new Set(
+			(list || [])
+				.map((t) =>
+					String(t || "")
+						.trim()
+						.replace(/\s+/g, "_")
+						.replace(/,/g, ""),
+				)
+				.filter(Boolean),
+		),
+	];
+}
+
+function resolveDeckName(settings, prev, options) {
+	if (options.deckName) return options.deckName;
+	if (prev?.deckName) return prev.deckName;
+	if (!prev) return settings.lastDeckName || settings.deckName || "Default";
+	return settings.deckName || "Default";
+}
+
+function resolveTags(settings, prev, options) {
+	if (Array.isArray(options.tags)) return sanitizeTags(options.tags);
+	if (prev?.tags?.length) return sanitizeTags(prev.tags);
+	if (settings.lastTags?.length) return sanitizeTags(settings.lastTags);
+	return parseTags(settings.tags);
 }
 
 function isMissingNotionBlock(err, block) {
@@ -133,13 +163,6 @@ async function storeMediaAll(ankiUrl, media) {
 	if (dirty) await setMediaCache(cache);
 }
 
-function resolveDeckName(settings, prev, options) {
-	if (options.deckName) return options.deckName;
-	if (prev?.deckName) return prev.deckName;
-	if (!prev) return settings.lastDeckName || settings.deckName || "Default";
-	return settings.deckName || "Default";
-}
-
 async function hydrateFromAnki(force = false) {
 	if (!force && Date.now() - lastHydrateAt < 8000) return;
 	const { settings, cards, queue } = await getState();
@@ -163,6 +186,7 @@ async function hydrateFromAnki(force = false) {
 			contentHash: local?.contentHash || null,
 			deckName: remoteCard.deckName || local?.deckName || "Default",
 			front: remoteCard.front || local?.front || "",
+			tags: remoteCard.tags || local?.tags || [],
 			error: null,
 		};
 	}
@@ -180,6 +204,7 @@ async function syncBlock(blockId, options = {}) {
 	const id = NASNotion.normalizeBlockId(blockId);
 	const prev = cards[id];
 	const deckName = resolveDeckName(settings, prev, options);
+	const tags = resolveTags(settings, prev, options);
 	const moveDeck = Boolean(options.deckName) || !prev?.noteId;
 
 	let tree;
@@ -204,7 +229,6 @@ async function syncBlock(blockId, options = {}) {
 	} catch (_) {}
 
 	const converted = await NASConverter.convertBlock(tree, { pageTitle });
-
 	const contentHash = await NASConverter.hashText(converted.front + "\n" + converted.back);
 	const live = await ankiAvailable(settings.ankiUrl);
 
@@ -232,14 +256,16 @@ async function syncBlock(blockId, options = {}) {
 			contentHash,
 			deckName,
 			front: converted.front,
+			tags,
 			error: null,
 		};
 		await setCards(cards);
-		await enqueue({ type: "sync", blockId: id, deckName, moveDeck });
+		await enqueue({ type: "sync", blockId: id, deckName, moveDeck, tags });
 		return { ok: true, action: "queued", status: "pending", deckName };
 	}
 
-	if (!options.force && prev?.noteId && prev.contentHash === contentHash && prev.status === "synced" && prev.deckName === deckName) {
+	const sameTags = JSON.stringify(prev?.tags || []) === JSON.stringify(tags);
+	if (!options.force && prev?.noteId && prev.contentHash === contentHash && prev.status === "synced" && prev.deckName === deckName && sameTags) {
 		return { ok: true, action: "unchanged", noteId: prev.noteId, status: "synced", deckName };
 	}
 
@@ -249,7 +275,7 @@ async function syncBlock(blockId, options = {}) {
 		front: converted.front,
 		back: converted.back,
 		blockId: id,
-		tags: parseTags(settings.tags),
+		tags,
 		moveDeck,
 	});
 
@@ -260,12 +286,16 @@ async function syncBlock(blockId, options = {}) {
 		contentHash,
 		deckName,
 		front: converted.front,
+		tags,
 		error: null,
 	};
 	await setCards(cards);
 
-	if (options.deckName) {
-		await saveSettings({ ...settings, lastDeckName: options.deckName });
+	if (options.deckName || Array.isArray(options.tags)) {
+		const patch = { ...settings };
+		if (options.deckName) patch.lastDeckName = options.deckName;
+		if (Array.isArray(options.tags)) patch.lastTags = tags;
+		await saveSettings(patch);
 	}
 	return { ok: true, action: prev?.noteId ? "updated" : "created", noteId, status: "synced", deckName };
 }
@@ -326,6 +356,7 @@ async function processQueue() {
 					force: true,
 					deckName: op.deckName,
 					moveDeck: op.moveDeck,
+					tags: op.tags,
 				});
 			}
 			processed += 1;
@@ -411,6 +442,15 @@ async function injectIntoTab(tabId) {
 	try {
 		await chrome.scripting.executeScript({
 			target: { tabId, allFrames: true },
+			world: "MAIN",
+			files: ["page-guard.js"],
+		});
+	} catch (e) {
+		console.warn("[NAS] page-guard inject failed", e.message);
+	}
+	try {
+		await chrome.scripting.executeScript({
+			target: { tabId, allFrames: true },
 			files: ["content.js"],
 		});
 	} catch (e) {
@@ -450,7 +490,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 	if (alarm.name === "nas-sync") await backgroundReconcile();
 });
 
-chrome.storage.onChanged.addListener((changes, area) => {
+chrome.storage.onChanged.addListener((changes) => {
 	if (changes.settings) {
 		const next = changes.settings.newValue || {};
 		scheduleAlarm(next.intervalMinutes);
@@ -464,12 +504,76 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 	return true;
 });
 
+async function forgetTag(tag) {
+	const t = sanitizeTags([tag])[0];
+	if (!t) return { ok: true, tags: [] };
+	const { settings, cards } = await getState();
+	const lastTags = sanitizeTags(settings.lastTags || []).filter((x) => x !== t);
+	const hiddenTags = [...new Set([...(settings.hiddenTags || []), t])];
+	const next = { ...cards };
+	const affected = [];
+	for (const [id, card] of Object.entries(next)) {
+		if (card.tags?.includes(t)) {
+			const tags = card.tags.filter((x) => x !== t);
+			next[id] = { ...card, tags };
+			affected.push({ noteId: card.noteId, tags });
+		}
+	}
+	await setCards(next);
+	await saveSettings({ ...settings, lastTags, hiddenTags });
+	if (await ankiAvailable(settings.ankiUrl)) {
+		for (const item of affected) {
+			if (!item.noteId) continue;
+			try {
+				await NASAnki.setNoteTags(settings.ankiUrl, item.noteId, item.tags);
+			} catch (e) {
+				console.warn("forget tag in Anki failed", e);
+			}
+		}
+	}
+	return { ok: true, tags: lastTags, hiddenTags };
+}
+
+async function renameTag(from, to) {
+	const src = sanitizeTags([from])[0];
+	const dst = sanitizeTags([to])[0];
+	if (!src) return { ok: true, tags: [] };
+	if (!dst || src === dst) return forgetTag(src);
+	const { settings, cards } = await getState();
+	let lastTags = sanitizeTags((settings.lastTags || []).map((x) => (x === src ? dst : x)));
+	if (!lastTags.includes(dst)) lastTags.push(dst);
+	const hiddenTags = (settings.hiddenTags || []).filter((x) => x !== dst && x !== src);
+	const next = { ...cards };
+	const affected = [];
+	for (const [id, card] of Object.entries(next)) {
+		if (card.tags?.includes(src)) {
+			const tags = sanitizeTags(card.tags.map((x) => (x === src ? dst : x)));
+			next[id] = { ...card, tags };
+			affected.push({ noteId: card.noteId, tags });
+		}
+	}
+	await setCards(next);
+	await saveSettings({ ...settings, lastTags, hiddenTags });
+	if (await ankiAvailable(settings.ankiUrl)) {
+		for (const item of affected) {
+			if (!item.noteId) continue;
+			try {
+				await NASAnki.setNoteTags(settings.ankiUrl, item.noteId, item.tags);
+			} catch (e) {
+				console.warn("rename tag in Anki failed", e);
+			}
+		}
+	}
+	return { ok: true, tags: lastTags, hiddenTags };
+}
+
 async function handleMessage(msg) {
 	switch (msg.type) {
 		case "SYNC":
 			return syncBlock(msg.blockId, {
 				deckName: msg.deckName,
-				force: Boolean(msg.deckName),
+				tags: msg.tags,
+				force: Boolean(msg.deckName) || Array.isArray(msg.tags),
 			});
 		case "UNSYNC":
 			return unsyncBlock(msg.blockId);
@@ -490,8 +594,12 @@ async function handleMessage(msg) {
 			};
 		}
 		case "GET_DECKS": {
-			const { settings } = await getState();
+			const { settings, cards } = await getState();
 			const fallbackDefault = settings.deckName || "Default";
+			const used = new Set([...(settings.lastTags || []), ...parseTags(settings.tags), ...Object.values(cards).flatMap((c) => c.tags || [])]);
+			const hidden = new Set(settings.hiddenTags || []);
+			const usedTags = [...used].filter((t) => t && !hidden.has(t)).sort((a, b) => a.localeCompare(b));
+			const defaultTags = (settings.lastTags?.length ? sanitizeTags(settings.lastTags) : parseTags(settings.tags)).filter((t) => !hidden.has(t));
 			try {
 				const decks = (await NASAnki.listDecks(settings.ankiUrl)).filter(Boolean);
 				await chrome.storage.local.set({ deckCache: decks });
@@ -502,7 +610,21 @@ async function handleMessage(msg) {
 						await saveSettings({ ...settings, lastDeckName: defaultDeck });
 					}
 				}
-				return { ok: true, anki: true, decks, defaultDeck };
+				let ankiTags = [];
+				try {
+					ankiTags = await NASAnki.listTags(settings.ankiUrl);
+					ankiTags = (ankiTags || []).filter((t) => t && !hidden.has(t));
+				} catch (_) {}
+				return {
+					ok: true,
+					anki: true,
+					decks,
+					defaultDeck,
+					tags: usedTags,
+					ankiTags,
+					defaultTags,
+					hiddenTags: [...hidden],
+				};
 			} catch {
 				const extra = await chrome.storage.local.get("deckCache");
 				return {
@@ -510,6 +632,10 @@ async function handleMessage(msg) {
 					anki: false,
 					decks: extra.deckCache || [],
 					defaultDeck: settings.lastDeckName || fallbackDefault,
+					tags: usedTags,
+					ankiTags: [],
+					defaultTags,
+					hiddenTags: [...hidden],
 				};
 			}
 		}
@@ -529,6 +655,10 @@ async function handleMessage(msg) {
 		}
 		case "PROCESS_QUEUE":
 			return { ok: true, ...(await processQueue()) };
+		case "FORGET_TAG":
+			return forgetTag(msg.tag);
+		case "RENAME_TAG":
+			return renameTag(msg.from, msg.to);
 		default:
 			throw new Error(`Unknown message: ${msg.type}`);
 	}
