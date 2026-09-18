@@ -186,6 +186,7 @@ async function hydrateFromAnki(force = false) {
 			contentHash: local?.contentHash || null,
 			deckName: remoteCard.deckName || local?.deckName || "Default",
 			front: remoteCard.front || local?.front || "",
+			customTitle: remoteCard.customTitle || local?.customTitle || null,
 			tags: remoteCard.tags || local?.tags || [],
 			error: null,
 		};
@@ -206,6 +207,8 @@ async function syncBlock(blockId, options = {}) {
 	const deckName = resolveDeckName(settings, prev, options);
 	const tags = resolveTags(settings, prev, options);
 	const moveDeck = Boolean(options.deckName) || !prev?.noteId;
+	// undefined → сохраняем прежний ручной заголовок; "" → явный сброс на авто
+	const customTitle = options.title !== undefined ? String(options.title || "").trim() || null : prev?.customTitle || null;
 
 	let tree;
 	try {
@@ -228,11 +231,11 @@ async function syncBlock(blockId, options = {}) {
 		pageTitle = await NASNotion.getContainingPageTitle(settings.notionToken, tree);
 	} catch (_) {}
 
-	const converted = await NASConverter.convertBlock(tree, { pageTitle });
+	const converted = await NASConverter.convertBlock(tree, { pageTitle, customTitle });
 	const contentHash = await NASConverter.hashText(converted.front + "\n" + converted.back);
-	const live = await ankiAvailable(settings.ankiUrl);
+	const ankiLive = await ankiAvailable(settings.ankiUrl);
 
-	if (live && prev && (prev.noteId || prev.status === "synced")) {
+	if (ankiLive && prev && (prev.noteId || prev.status === "synced")) {
 		const existence = await NASAnki.noteExists(settings.ankiUrl, id, prev.noteId);
 		if (!existence.exists) {
 			const recreate = Boolean(options.deckName) && !options.fromReconcile;
@@ -248,7 +251,7 @@ async function syncBlock(blockId, options = {}) {
 		}
 	}
 
-	if (!live) {
+	if (!ankiLive) {
 		cards[id] = {
 			noteId: prev?.noteId || null,
 			status: "pending",
@@ -256,6 +259,7 @@ async function syncBlock(blockId, options = {}) {
 			contentHash,
 			deckName,
 			front: converted.front,
+			customTitle,
 			tags,
 			error: null,
 		};
@@ -275,6 +279,7 @@ async function syncBlock(blockId, options = {}) {
 		front: converted.front,
 		back: converted.back,
 		blockId: id,
+		customTitle,
 		tags,
 		moveDeck,
 	});
@@ -286,6 +291,7 @@ async function syncBlock(blockId, options = {}) {
 		contentHash,
 		deckName,
 		front: converted.front,
+		customTitle,
 		tags,
 		error: null,
 	};
@@ -296,8 +302,8 @@ async function syncBlock(blockId, options = {}) {
 		if (options.deckName) patch.lastDeckName = options.deckName;
 		if (Array.isArray(options.tags)) {
 			patch.lastTags = tags;
-			const live = new Set(tags);
-			patch.hiddenTags = (settings.hiddenTags || []).filter((t) => !live.has(t));
+			const keep = new Set(tags);
+			patch.hiddenTags = (settings.hiddenTags || []).filter((t) => !keep.has(t));
 		}
 		await saveSettings(patch);
 	}
@@ -588,7 +594,8 @@ async function handleMessage(msg) {
 			return syncBlock(msg.blockId, {
 				deckName: msg.deckName,
 				tags: msg.tags,
-				force: Boolean(msg.deckName) || Array.isArray(msg.tags),
+				title: msg.title,
+				force: Boolean(msg.deckName) || Array.isArray(msg.tags) || msg.title !== undefined,
 			});
 		case "UNSYNC":
 			return unsyncBlock(msg.blockId);

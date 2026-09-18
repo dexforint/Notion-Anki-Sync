@@ -63,7 +63,7 @@ AnkiWeb и телефон получают карточки обычной си�
 ## Ограничения
 
 - Notion в Chrome. Пункт меню — оверлей (DOM Notion нельзя менять).
-- Только блоки **toggle**.
+- Any block type: toggles, headings, paragraphs, lists, code, …
 - Запись в Anki — только Desktop + AnkiConnect.
 - Пока Anki закрыт, удаление заметки в Anki расширение не увидит.
 

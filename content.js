@@ -1,5 +1,34 @@
 (() => {
-	if (window.__NAS_LOADED__) return;
+	/* ---------- за щ и т а   о т   д у б л е й ---------- */
+	// Контент-скрипты одного расширения делят isolated world, поэтому могут
+	// «пощупать» друг друга. Если предыдущий инстанс жив — не дублируемся.
+	// Если он мёртв (расширение перезагрузили → context invalidated) —
+	// забираем управление и вычищаем его DOM.
+
+	function extensionAlive() {
+		try {
+			return Boolean(chrome && chrome.runtime && chrome.runtime.id);
+		} catch (_) {
+			return false;
+		}
+	}
+
+	const prevInstance = window.__NAS_INSTANCE__;
+	if (prevInstance && typeof prevInstance.isAlive === "function") {
+		let alive = false;
+		try {
+			alive = prevInstance.isAlive();
+		} catch (_) {
+			alive = false;
+		}
+		if (alive) return;
+	}
+	try {
+		document.querySelectorAll("#nas-root, #nas-handle-layer").forEach((n) => n.remove());
+	} catch (_) {}
+
+	const instance = { isAlive: () => extensionAlive(), startedAt: Date.now() };
+	window.__NAS_INSTANCE__ = instance;
 	window.__NAS_LOADED__ = true;
 
 	const TAG_COLORS = [
@@ -23,6 +52,7 @@
 	let handleRect = null;
 	let badgeMap = new Map();
 	let badgeRaf = 0;
+	let badgeTimer = 0;
 	let selectedTags = [];
 	let tagCatalog = [];
 	let ankiTagCatalog = [];
@@ -45,8 +75,45 @@
 
 	showBeacon();
 
+	/* ---------- безопасная работа с chrome.* ---------- */
+
+	function sendRuntimeMessage(message, callback) {
+		if (!extensionAlive()) return;
+		try {
+			chrome.runtime.sendMessage(message, (res) => {
+				let lastError;
+				try {
+					lastError = chrome.runtime.lastError;
+				} catch (_) {}
+				if (lastError) {
+					if (callback) callback({ ok: false, error: lastError.message });
+					return;
+				}
+				if (callback) callback(res);
+			});
+		} catch (_) {}
+	}
+
+	function shutdown() {
+		try {
+			clearInterval(badgeTimer);
+		} catch (_) {}
+		badgeTimer = 0;
+		try {
+			window.__NAS_INSTANCE__ = null;
+			window.__NAS_LOADED__ = false;
+		} catch (_) {}
+		try {
+			root.remove();
+			handleLayer.remove();
+		} catch (_) {}
+	}
+
 	function iconImg(size) {
-		const url = chrome.runtime.getURL("icons/icon.svg");
+		let url = "";
+		try {
+			url = chrome.runtime.getURL("icons/icon.svg");
+		} catch (_) {}
 		return `<img class="nas-icon" src="${url}" width="${size}" height="${size}" alt="" draggable="false">`;
 	}
 
@@ -197,6 +264,8 @@
 		if (pickerEl) {
 			pickerEl.style.display = "none";
 			pickerEl.dataset.tagsReady = "";
+			const title = pickerEl.querySelector(".nas-title-input");
+			if (title) title.value = "";
 		}
 		if (tagMenuEl) {
 			tagMenuEl.hidden = true;
@@ -238,11 +307,13 @@
 		pickerEl.className = "nas-picker";
 		pickerEl.innerHTML = `
       <div class="nas-picker-title">Anki</div>
-      <label class="nas-picker-label">Deck</label>
+      <label class="nas-picker-label nas-label-title">Title (Front)</label>
+      <input class="nas-picker-input nas-title-input" type="text" placeholder="Empty → auto from block content" />
+      <label class="nas-picker-label nas-label-deck">Deck</label>
       <select class="nas-picker-select"></select>
-      <input class="nas-picker-input" type="text" placeholder="Or type a new deck name" />
+      <input class="nas-picker-input nas-deck-input" type="text" placeholder="Or type a new deck name" />
       <div class="nas-picker-hint"></div>
-      <label class="nas-picker-label">Tags</label>
+      <label class="nas-picker-label nas-label-tags">Tags</label>
       <div class="nas-tags">
         <div class="nas-tags-control">
           <div class="nas-tags-chips"></div>
@@ -277,13 +348,14 @@
 			e.preventDefault();
 			commitTagInput();
 			const select = pickerEl.querySelector(".nas-picker-select");
-			const input = pickerEl.querySelector(".nas-picker-input");
+			const input = pickerEl.querySelector(".nas-deck-input");
 			const deck = (input.value || select.value || "Default").trim();
+			const title = (pickerEl.querySelector(".nas-title-input").value || "").trim();
 			const id = pickerEl.dataset.blockId;
 			const tags = [...selectedTags];
 			hidePicker();
 			if (!id) return;
-			sendSync("SYNC", id, { deckName: deck || "Default", tags });
+			sendSync("SYNC", id, { deckName: deck || "Default", tags, title });
 		});
 
 		const tagInput = pickerEl.querySelector(".nas-tags-input");
@@ -331,9 +403,16 @@
 			if (e) e.preventDefault();
 			const items = currentTagSuggestions();
 			const choice = items[tagHighlight] || items[0];
-			const typed = tagInputEl()?.value || "";
-			if (choice) addTag(choice.value);
-			else addTag(typed);
+			if (choice?.selected) {
+				const input = tagInputEl();
+				if (input) input.value = "";
+				tagHighlight = 0;
+				removeTag(choice.value);
+			} else if (choice) {
+				addTag(choice.value);
+			} else {
+				addTag(tagInputEl()?.value || "");
+			}
 			return true;
 		}
 		if (key === "Backspace") {
@@ -362,7 +441,7 @@
 		if (renamingFrom && renamingFrom !== tag) {
 			const from = renamingFrom;
 			renamingFrom = "";
-			chrome.runtime.sendMessage({ type: "RENAME_TAG", from, to: tag }, (res) => {
+			sendRuntimeMessage({ type: "RENAME_TAG", from, to: tag }, (res) => {
 				if (res?.tags) tagCatalog = res.tags;
 				if (res?.hiddenTags) hiddenTags = res.hiddenTags;
 				selectedTags = selectedTags.filter((t) => t !== from);
@@ -399,7 +478,7 @@
 		tagCatalog = tagCatalog.filter((t) => t !== tag);
 		ankiTagCatalog = ankiTagCatalog.filter((t) => t !== tag);
 		if (!hiddenTags.includes(tag)) hiddenTags.push(tag);
-		chrome.runtime.sendMessage({ type: "FORGET_TAG", tag }, (res) => {
+		sendRuntimeMessage({ type: "FORGET_TAG", tag }, (res) => {
 			if (res?.tags) tagCatalog = res.tags;
 			if (res?.hiddenTags) hiddenTags = res.hiddenTags;
 			renderTagChips();
@@ -412,6 +491,7 @@
 	function startRename(tag) {
 		renamingFrom = tag;
 		const input = tagInputEl();
+		if (!input) return;
 		input.value = tag;
 		tagMenuOpen = true;
 		input.focus();
@@ -447,7 +527,8 @@
 	}
 
 	function currentTagSuggestions() {
-		const q = sanitizeTag(tagInputEl()?.value || "").toLowerCase();
+		const raw = sanitizeTag(tagInputEl()?.value || "");
+		const q = raw.toLowerCase();
 		const selected = new Set(selectedTags);
 		const prefix = [];
 		const rest = [];
@@ -468,7 +549,7 @@
 			selected: selected.has(value),
 		}));
 		const exact = allKnownTags().some((t) => t.toLowerCase() === q);
-		if (q && !exact) matches.push({ value: q, create: true, selected: false });
+		if (q && !exact) matches.push({ value: raw, create: true, selected: false });
 		return matches;
 	}
 
@@ -501,13 +582,13 @@
 			.map((item, idx) => {
 				const [fg, bg] = tagColor(item.value);
 				const label = item.create ? (ru ? `Создать «${escapeHtml(item.value)}»` : `Create “${escapeHtml(item.value)}”`) : escapeHtml(item.value);
+				const check = item.selected ? `<span class="nas-tag-check" title="${ru ? "Уже выбран" : "Selected"}">✓</span>` : "";
 				const tools = item.create
 					? ""
 					: `<span class="nas-tag-tools">
               <button type="button" class="nas-tag-rename" data-tag="${escapeAttr(item.value)}" title="${ru ? "Переименовать" : "Rename"}">✎</button>
               <button type="button" class="nas-tag-forget" data-tag="${escapeAttr(item.value)}" title="${ru ? "Удалить тег везде" : "Delete tag everywhere"}">×</button>
             </span>`;
-				const check = item.selected ? `<span class="nas-tag-check" title="${ru ? "Уже выбран" : "Selected"}">✓</span>` : "";
 				return `<div class="nas-tags-option${idx === tagHighlight ? " is-active" : ""}${item.selected ? " is-selected" : ""}" data-index="${idx}" data-tag="${escapeAttr(item.value)}">
           <span class="nas-tag-dot" style="background:${bg};color:${fg}">${escapeHtml(item.value.slice(0, 1).toUpperCase())}</span>
           <span class="nas-tag-name">${label}</span>
@@ -527,12 +608,12 @@
 				if (e.target.closest(".nas-tag-tools")) return;
 				e.preventDefault();
 				e.stopPropagation();
-				const idx = Number(row.getAttribute("data-index"));
-				const item = items[idx];
 				const value = row.getAttribute("data-tag");
-				if (item?.selected) removeTag(value);
+				if (!value) return;
+				if (selectedTags.includes(value)) removeTag(value);
 				else addTag(value);
-				tagInputEl()?.focus();
+				const input = tagInputEl();
+				if (input) input.focus();
 			});
 		});
 		menu.querySelectorAll(".nas-tag-forget").forEach((btn) => {
@@ -593,13 +674,16 @@
 		el.querySelector(".nas-picker-cancel").textContent = ru ? "Отмена" : "Cancel";
 		el.querySelector(".nas-picker-unsync").textContent = ru ? "Отвязать" : "Unsync";
 		el.querySelector(".nas-picker-unsync").style.display = synced ? "inline-flex" : "none";
-		el.querySelector(".nas-picker-input").placeholder = ru ? "Или введите новую колоду" : "Or type a new deck name";
+		el.querySelector(".nas-title-input").placeholder = ru ? "Пусто → авто из содержимого блока" : "Empty → auto from block content";
+		el.querySelector(".nas-deck-input").placeholder = ru ? "Или введите новую колоду" : "Or type a new deck name";
 		el.querySelector(".nas-tags-input").placeholder = ru ? "Найти или создать тег" : "Find or create a tag";
-		el.querySelectorAll(".nas-picker-label")[0].textContent = ru ? "Колода" : "Deck";
-		el.querySelectorAll(".nas-picker-label")[1].textContent = ru ? "Теги" : "Tags";
+		el.querySelector(".nas-label-title").textContent = ru ? "Заголовок (Front)" : "Title (Front)";
+		el.querySelector(".nas-label-deck").textContent = ru ? "Колода" : "Deck";
+		el.querySelector(".nas-label-tags").textContent = ru ? "Теги" : "Tags";
 		if (!sameCard) {
 			el.querySelector(".nas-picker-hint").textContent = ru ? "Загрузка колод…" : "Loading decks…";
-			el.querySelector(".nas-picker-input").value = "";
+			el.querySelector(".nas-deck-input").value = "";
+			el.querySelector(".nas-title-input").value = synced ? cardsCache[id]?.customTitle || "" : "";
 			el.querySelector(".nas-tags-input").value = "";
 			el.dataset.tagsReady = "";
 			tagMenuOpen = false;
@@ -611,11 +695,15 @@
 		}
 		positionPanel(el, rect);
 
-		chrome.runtime.sendMessage({ type: "GET_DECKS" }, (res) => {
+		sendRuntimeMessage({ type: "GET_DECKS" }, (res) => {
 			if (!pickerOpen || el.dataset.blockId !== id) return;
-			const live = Array.isArray(res?.decks) ? res.decks.filter(Boolean) : [];
-			const preferred = cardsCache[id]?.deckName || res?.defaultDeck || "";
-			const names = res?.anki ? live : Array.from(new Set(live.concat(preferred).filter(Boolean)));
+			if (!res || res.ok === false) {
+				el.querySelector(".nas-picker-hint").textContent = ru ? "Не удалось получить списки колод и тегов." : "Failed to load decks and tags.";
+				return;
+			}
+			const live = Array.isArray(res.decks) ? res.decks.filter(Boolean) : [];
+			const preferred = cardsCache[id]?.deckName || res.defaultDeck || "";
+			const names = res.anki ? live : Array.from(new Set(live.concat(preferred).filter(Boolean)));
 			const select = el.querySelector(".nas-picker-select");
 			if (!names.length) {
 				select.innerHTML = `<option value="Default">Default</option>`;
@@ -624,15 +712,15 @@
 				select.innerHTML = names.map((d) => `<option value="${escapeAttr(d)}">${escapeHtml(d)}</option>`).join("");
 				select.value = names.includes(preferred) ? preferred : names[0];
 			}
-			hiddenTags = Array.isArray(res?.hiddenTags) ? res.hiddenTags : [];
-			tagCatalog = Array.isArray(res?.tags) ? res.tags : [];
-			ankiTagCatalog = Array.isArray(res?.ankiTags) ? res.ankiTags : [];
+			hiddenTags = Array.isArray(res.hiddenTags) ? res.hiddenTags : [];
+			tagCatalog = Array.isArray(res.tags) ? res.tags : [];
+			ankiTagCatalog = Array.isArray(res.ankiTags) ? res.ankiTags : [];
 			if (!el.dataset.tagsReady) {
 				el.dataset.tagsReady = "1";
-				selectedTags = synced ? sanitizeList(cardsCache[id]?.tags) : sanitizeList(res?.defaultTags);
+				selectedTags = synced ? sanitizeList(cardsCache[id]?.tags) : sanitizeList(res.defaultTags);
 				renderTagChips();
 			}
-			el.querySelector(".nas-picker-hint").textContent = res?.anki
+			el.querySelector(".nas-picker-hint").textContent = res.anki
 				? ru
 					? "Колода и теги запоминаются для следующей карточки"
 					: "Deck and tags are reused for the next card"
@@ -645,13 +733,9 @@
 	}
 
 	function sendSync(type, blockId, extra = {}) {
-		chrome.runtime.sendMessage({ type, blockId, ...extra }, (res) => {
-			if (chrome.runtime.lastError) {
-				showToast(chrome.runtime.lastError.message, "err");
-				return;
-			}
-			if (!res?.ok && res?.error) {
-				showToast(res.error, "err");
+		sendRuntimeMessage({ type, blockId, ...extra }, (res) => {
+			if (!res?.ok) {
+				showToast(res?.error || "Sync failed", "err");
 				return;
 			}
 			if (type === "UNSYNC") {
@@ -775,7 +859,8 @@
 		btn.dataset.blockId = id;
 		btn.style.display = "flex";
 		btn.classList.toggle("nas-title-btn-synced", synced);
-		btn.querySelector(".nas-title-btn-label").textContent = synced ? (ru ? "В Anki" : "Synced") : ru ? "В Anki" : "Sync page";
+		const label = btn.querySelector(".nas-title-btn-label");
+		if (label) label.textContent = synced ? (ru ? "В Anki" : "Synced") : ru ? "В Anki" : "Sync page";
 		const trect = leaf.getBoundingClientRect();
 		const height = 32;
 		let left = trect.right + 10;
@@ -837,7 +922,7 @@
 	}
 
 	function refreshState() {
-		chrome.runtime.sendMessage({ type: "GET_STATE" }, (res) => {
+		sendRuntimeMessage({ type: "GET_STATE" }, (res) => {
 			if (!res?.ok) return;
 			cardsCache = res.cards || {};
 			requestBadges();
@@ -866,18 +951,30 @@
 	window.addEventListener("resize", requestBadges);
 	document.addEventListener("mousemove", requestBadges, { passive: true });
 
-	chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-		if (msg?.type === "PING") {
-			sendResponse({ ok: true, href: location.href, blockId: lastBlockId || pageTitleId() });
-		}
-	});
+	try {
+		chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+			if (msg?.type === "PING") {
+				sendResponse({ ok: true, href: location.href, blockId: lastBlockId || pageTitleId() });
+			}
+		});
+	} catch (_) {}
 
 	refreshState();
-	chrome.storage.onChanged.addListener((changes, area) => {
-		if (area === "local" && changes.cards) {
-			cardsCache = changes.cards.newValue || {};
-			requestBadges();
+
+	try {
+		chrome.storage.onChanged.addListener((changes, area) => {
+			if (area === "local" && changes.cards) {
+				cardsCache = changes.cards.newValue || {};
+				requestBadges();
+			}
+		});
+	} catch (_) {}
+
+	badgeTimer = setInterval(() => {
+		if (!extensionAlive()) {
+			shutdown();
+			return;
 		}
-	});
-	setInterval(requestBadges, 400);
+		requestBadges();
+	}, 400);
 })();

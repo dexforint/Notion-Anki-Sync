@@ -4,11 +4,7 @@
 
 # Notion Anki Sync
 
-
-
 https://github.com/user-attachments/assets/e958801c-2619-4110-a373-d1d0928564d3
-
-
 
 **English** · [Русский](README.ru.md)
 
@@ -67,7 +63,7 @@ The Notion token stays in Chrome storage. Traffic goes only to `api.notion.com` 
 ## Limits
 
 - Notion web in Chrome. The menu is overlaid (Notion DOM is locked).
-- Only **toggle** blocks.
+- Any block type: toggles, headings, paragraphs, lists, code, …
 - Anki desktop + AnkiConnect required for writes.
 - If Anki is closed, the extension cannot see that you deleted a note there until the next sync with Anki open.
 

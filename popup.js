@@ -76,7 +76,7 @@ function renderCards() {
 	list.innerHTML = "";
 	if (!items.length) {
 		empty.hidden = false;
-		empty.textContent = total ? "No matches." : "No tracked toggles yet. Sync one from Notion.";
+		empty.textContent = total ? "No matches." : "No tracked blocks yet. Sync one from Notion.";
 		return;
 	}
 	empty.hidden = true;
