@@ -203,7 +203,7 @@ async function syncBlock(blockId, options = {}) {
 		pageTitle = await NASNotion.getContainingPageTitle(settings.notionToken, tree);
 	} catch (_) {}
 
-	const converted = await NASConverter.convertToggle(tree, { pageTitle });
+	const converted = await NASConverter.convertBlock(tree, { pageTitle });
 
 	const contentHash = await NASConverter.hashText(converted.front + "\n" + converted.back);
 	const live = await ankiAvailable(settings.ankiUrl);
