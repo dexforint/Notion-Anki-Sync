@@ -19,11 +19,15 @@
         <label>Default deck
             <input id="deckName" type="text" />
         </label>
-        <label>Tags (comma-separated)
+        <label>Fallback tags (used only if you have not tagged a card yet)
             <input id="tags" type="text" />
         </label>
         <label>Background sync interval (minutes)
             <input id="intervalMinutes" type="number" min="5" />
+        </label>
+        <label class="checkbox-line">
+            <input id="autoSync" type="checkbox" />
+            <span>Auto-update cards while editing in Notion (debounced)</span>
         </label>
         <div class="row">
             <button id="save">Save</button>

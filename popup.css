@@ -104,8 +104,13 @@ h1 {
 	font-size: 11px;
 }
 
-button#syncAll {
-	width: 100%;
+.sync-actions {
+	display: flex;
+	gap: 8px;
+	margin-bottom: 8px;
+}
+.sync-actions button {
+	flex: 1;
 	border: 0;
 	border-radius: 10px;
 	padding: 10px 12px;
@@ -115,8 +120,12 @@ button#syncAll {
 	font-weight: 650;
 	cursor: pointer;
 }
-button#syncAll:hover {
+.sync-actions button:hover {
 	filter: brightness(1.05);
+}
+.sync-actions button.secondary {
+	background: var(--blue-soft);
+	color: var(--blue);
 }
 button:disabled {
 	opacity: 0.6;
