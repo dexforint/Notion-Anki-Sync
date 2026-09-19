@@ -6,6 +6,7 @@ const DEFAULTS = {
 	deckName: "Default",
 	tags: "notion",
 	intervalMinutes: 10,
+	autoSync: true,
 };
 
 const NOTION_HOST = /(^|\.)notion\.(so|site|com)$/i;
@@ -139,16 +140,16 @@ async function arrayBufferToBase64(buf) {
 	return btoa(binary);
 }
 
-async function storeMediaAll(ankiUrl, media) {
+async function storeMediaAll(ankiUrl, media, knownNames) {
 	if (!media?.length) return;
 	const cache = await getMediaCache();
 	let dirty = false;
 	for (const file of media) {
 		if (!file?.filename || !file.url) continue;
 		const key = file.cacheKey || String(file.url).split("?")[0];
-		const known = cache[key] === file.filename;
-		if (known && (await NASAnki.mediaExists(ankiUrl, file.filename))) continue;
-		if (await NASAnki.mediaExists(ankiUrl, file.filename)) {
+		const inAnki = knownNames ? knownNames.has(file.filename) : await NASAnki.mediaExists(ankiUrl, file.filename);
+		if (cache[key] === file.filename && inAnki) continue;
+		if (inAnki) {
 			cache[key] = file.filename;
 			dirty = true;
 			continue;
@@ -159,20 +160,21 @@ async function storeMediaAll(ankiUrl, media) {
 		await NASAnki.storeMedia(ankiUrl, file.filename, data);
 		cache[key] = file.filename;
 		dirty = true;
+		if (knownNames) knownNames.add(file.filename);
 	}
 	if (dirty) await setMediaCache(cache);
 }
 
 async function hydrateFromAnki(force = false) {
-	if (!force && Date.now() - lastHydrateAt < 8000) return;
+	if (!force && Date.now() - lastHydrateAt < 8000) return null;
 	const { settings, cards, queue } = await getState();
-	if (!(await ankiAvailable(settings.ankiUrl))) return;
+	if (!(await ankiAvailable(settings.ankiUrl))) return null;
 	let remote = {};
 	try {
 		remote = await NASAnki.listTracked(settings.ankiUrl);
 	} catch (e) {
 		console.warn("hydrateFromAnki failed", e);
-		return;
+		return null;
 	}
 	lastHydrateAt = Date.now();
 	const queued = new Set(queue.map((q) => q.blockId));
@@ -189,6 +191,8 @@ async function hydrateFromAnki(force = false) {
 			customTitle: remoteCard.customTitle || local?.customTitle || null,
 			tags: remoteCard.tags || local?.tags || [],
 			error: null,
+			pageId: local?.pageId || null,
+			pageLastEdited: local?.pageLastEdited || null,
 		};
 	}
 	for (const [id, local] of Object.entries(cards)) {
@@ -196,6 +200,7 @@ async function hydrateFromAnki(force = false) {
 		if (local.status === "pending" || queued.has(id)) next[id] = local;
 	}
 	if (JSON.stringify(next) !== JSON.stringify(cards)) await setCards(next);
+	return remote;
 }
 
 async function syncBlock(blockId, options = {}) {
@@ -207,12 +212,14 @@ async function syncBlock(blockId, options = {}) {
 	const deckName = resolveDeckName(settings, prev, options);
 	const tags = resolveTags(settings, prev, options);
 	const moveDeck = Boolean(options.deckName) || !prev?.noteId;
-	// undefined → сохраняем прежний ручной заголовок; "" → явный сброс на авто
 	const customTitle = options.title !== undefined ? String(options.title || "").trim() || null : prev?.customTitle || null;
 
 	let tree;
+	let pageInfo = { id: null, title: "", lastEdited: null };
 	try {
-		tree = await NASNotion.fetchBlockTree(settings.notionToken, id);
+		const meta = await NASNotion.fetchBlockTreeMeta(settings.notionToken, id);
+		tree = meta.block;
+		pageInfo = meta.pageInfo || pageInfo;
 	} catch (e) {
 		if (isMissingNotionBlock(e)) {
 			await deleteLocalAndRemote(id);
@@ -226,16 +233,13 @@ async function syncBlock(blockId, options = {}) {
 		return { ok: true, action: "deleted", reason: "trashed_in_notion" };
 	}
 
-	let pageTitle = "";
-	try {
-		pageTitle = await NASNotion.getContainingPageTitle(settings.notionToken, tree);
-	} catch (_) {}
-
+	const pageTitle = pageInfo.title || "";
 	const converted = await NASConverter.convertBlock(tree, { pageTitle, customTitle });
 	const contentHash = await NASConverter.hashText(converted.front + "\n" + converted.back);
-	const ankiLive = await ankiAvailable(settings.ankiUrl);
+	const ankiLive = options.ankiLive !== undefined ? options.ankiLive : await ankiAvailable(settings.ankiUrl);
 
-	if (ankiLive && prev && (prev.noteId || prev.status === "synced")) {
+	// knownInAnki=true → hydrate уже подтвердил, что заметка есть (reconcile-проход).
+	if (ankiLive && !options.knownInAnki && prev && (prev.noteId || prev.status === "synced")) {
 		const existence = await NASAnki.noteExists(settings.ankiUrl, id, prev.noteId);
 		if (!existence.exists) {
 			const recreate = Boolean(options.deckName) && !options.fromReconcile;
@@ -262,6 +266,8 @@ async function syncBlock(blockId, options = {}) {
 			customTitle,
 			tags,
 			error: null,
+			pageId: pageInfo.id,
+			pageLastEdited: pageInfo.lastEdited,
 		};
 		await setCards(cards);
 		await enqueue({ type: "sync", blockId: id, deckName, moveDeck, tags });
@@ -270,10 +276,18 @@ async function syncBlock(blockId, options = {}) {
 
 	const sameTags = JSON.stringify(prev?.tags || []) === JSON.stringify(tags);
 	if (!options.force && prev?.noteId && prev.contentHash === contentHash && prev.status === "synced" && prev.deckName === deckName && sameTags) {
+		// ВАЖНО: запоминаем страницу, иначе следующий fast-проход не сможет
+		// скипнуть эту карточку и снова пойдёт полным путём.
+		if (prev.pageId !== pageInfo.id || prev.pageLastEdited !== pageInfo.lastEdited) {
+			prev.pageId = pageInfo.id;
+			prev.pageLastEdited = pageInfo.lastEdited;
+			cards[id] = prev;
+			await setCards(cards);
+		}
 		return { ok: true, action: "unchanged", noteId: prev.noteId, status: "synced", deckName };
 	}
 
-	await storeMediaAll(settings.ankiUrl, converted.media);
+	await storeMediaAll(settings.ankiUrl, converted.media, options.mediaNames);
 	const noteId = await NASAnki.addOrUpdate(settings.ankiUrl, {
 		deckName,
 		front: converted.front,
@@ -282,6 +296,7 @@ async function syncBlock(blockId, options = {}) {
 		customTitle,
 		tags,
 		moveDeck,
+		skipTags: Boolean(prev?.noteId) && sameTags,
 	});
 
 	cards[id] = {
@@ -294,6 +309,8 @@ async function syncBlock(blockId, options = {}) {
 		customTitle,
 		tags,
 		error: null,
+		pageId: pageInfo.id,
+		pageLastEdited: pageInfo.lastEdited,
 	};
 	await setCards(cards);
 
@@ -352,86 +369,191 @@ async function processQueue() {
 
 	let processed = 0;
 	const rest = [...queue];
-	while (rest.length) {
-		const op = rest.shift();
-		await setQueue(rest);
-		try {
-			if (op.type === "unsync") {
-				await NASAnki.deleteByBlockId(settings.ankiUrl, op.blockId, op.noteId);
-				const st = await getState();
-				delete st.cards[op.blockId];
-				await setCards(st.cards);
-			} else if (op.type === "sync") {
-				await syncBlock(op.blockId, {
-					force: true,
-					deckName: op.deckName,
-					moveDeck: op.moveDeck,
-					tags: op.tags,
-				});
-			}
-			processed += 1;
-		} catch (e) {
-			rest.push(op);
+	NASNotion.beginPass();
+	try {
+		while (rest.length) {
+			const op = rest.shift();
 			await setQueue(rest);
-			break;
+			try {
+				if (op.type === "unsync") {
+					await NASAnki.deleteByBlockId(settings.ankiUrl, op.blockId, op.noteId);
+					const st = await getState();
+					delete st.cards[op.blockId];
+					await setCards(st.cards);
+				} else if (op.type === "sync") {
+					await syncBlock(op.blockId, {
+						force: true,
+						deckName: op.deckName,
+						moveDeck: op.moveDeck,
+						tags: op.tags,
+						ankiLive: true,
+					});
+				}
+				processed += 1;
+			} catch (e) {
+				rest.push(op);
+				await setQueue(rest);
+				break;
+			}
 		}
+	} finally {
+		NASNotion.endPass();
 	}
 	return { processed, anki: true };
 }
 
-async function backgroundReconcile() {
-	await hydrateFromAnki(true);
-	const { settings, cards } = await getState();
-	const summary = {
-		total: 0,
+const SYNC_SOFT_LIMIT_MS = 4 * 60 * 1000;
+const JOB_KEY = "syncJob";
+
+function emptySummary(total) {
+	return {
+		total: total || 0,
 		updated: 0,
 		created: 0,
 		unchanged: 0,
+		skipped: 0,
 		deleted: 0,
 		queued: 0,
 		orphaned: 0,
 		errors: 0,
-		anki: false,
+		queuedProcessed: 0,
 	};
+}
+
+function bumpSummary(summary, action) {
+	if (action === "updated") summary.updated += 1;
+	else if (action === "created") summary.created += 1;
+	else if (action === "unchanged") summary.unchanged += 1;
+	else if (action === "deleted") summary.deleted += 1;
+	else if (action === "queued") summary.queued += 1;
+	else if (action === "orphaned") summary.orphaned += 1;
+}
+
+async function getJob() {
+	const data = await chrome.storage.local.get(JOB_KEY);
+	return data[JOB_KEY] || null;
+}
+
+// Какие страницы изменились с прошлого синка (1 запрос на уникальную страницу).
+async function collectChangedPages(settings, cards, job) {
+	const pages = new Map();
+	for (let i = job.index; i < job.ids.length; i += 1) {
+		const c = cards[job.ids[i]];
+		if (!c?.pageId) continue;
+		if (!pages.has(c.pageId)) pages.set(c.pageId, c.pageLastEdited || null);
+	}
+	const changed = new Set();
+	for (const [pageId, storedAt] of pages) {
+		try {
+			const page = await NASNotion.getPage(settings.notionToken, pageId);
+			const lastEdited = page?.last_edited_time || null;
+			if (!storedAt || !lastEdited || storedAt !== lastEdited) changed.add(pageId);
+		} catch (_) {
+			changed.add(pageId); // не рискуем — пусть карточки сходят полным путём
+		}
+	}
+	return changed;
+}
+
+async function runSyncJob(mode) {
+	const existing = await getJob();
+	if (existing) return continueSyncJob(); // уже идёт — не плодим параллельные
+	const { settings } = await getState();
 	if (!settings.notionToken) {
 		const err = new Error("Notion token is not set. Open extension settings.");
 		err.code = "no_token";
 		throw err;
 	}
-
-	summary.anki = await ankiAvailable(settings.ankiUrl);
+	NASNotion.resetStats();
+	await hydrateFromAnki(true);
+	const { cards } = await getState();
 	const ids = Object.keys(cards);
-	summary.total = ids.length;
+	await chrome.storage.local.set({
+		[JOB_KEY]: {
+			mode,
+			phase: mode === "fast" ? "pages" : "cards",
+			ids,
+			index: 0,
+			total: ids.length,
+			startedAt: Date.now(),
+			updatedAt: Date.now(),
+			summary: emptySummary(ids.length),
+		},
+	});
+	return continueSyncJob();
+}
 
-	for (const id of ids) {
-		try {
-			const res = await syncBlock(id, { fromReconcile: true });
-			if (res.action === "updated") summary.updated += 1;
-			else if (res.action === "created") summary.created += 1;
-			else if (res.action === "unchanged") summary.unchanged += 1;
-			else if (res.action === "deleted") summary.deleted += 1;
-			else if (res.action === "queued") summary.queued += 1;
-			else if (res.action === "orphaned") summary.orphaned += 1;
-		} catch (e) {
-			summary.errors += 1;
-			const st = await getState();
-			if (st.cards[id]) {
-				st.cards[id].status = "error";
-				st.cards[id].error = e.message;
-				await setCards(st.cards);
+async function continueSyncJob() {
+	const job = await getJob();
+	if (!job) return { ok: true, partial: false, summary: null };
+	const { settings, cards } = await getState();
+	const anki = await ankiAvailable(settings.ankiUrl);
+	const mediaNames = anki ? await NASAnki.listMedia(settings.ankiUrl) : null;
+	const chunkStart = Date.now();
+	const summary = { ...emptySummary(job.total), ...(job.summary || {}) };
+
+	NASNotion.beginPass();
+	try {
+		let changedPages = null;
+		if (job.mode === "fast") {
+			if (job.phase !== "cards") {
+				const changed = await collectChangedPages(settings, cards, job);
+				job.changedPages = [...changed];
+				job.phase = "cards";
+				job.updatedAt = Date.now();
+				await chrome.storage.local.set({ [JOB_KEY]: job });
 			}
+			changedPages = new Set(job.changedPages || []);
 		}
+
+		while (job.index < job.ids.length) {
+			if (Date.now() - chunkStart > SYNC_SOFT_LIMIT_MS) {
+				job.summary = summary;
+				job.updatedAt = Date.now();
+				await chrome.storage.local.set({ [JOB_KEY]: job });
+				chrome.alarms.create("nas-sync-continue", { when: Date.now() + 31000 });
+				return { ok: true, partial: true, summary };
+			}
+			const id = job.ids[job.index];
+			job.index += 1;
+			const card = cards[id];
+			try {
+				if (card && job.mode === "fast" && card.status === "synced" && card.pageId && changedPages && !changedPages.has(card.pageId)) {
+					summary.skipped += 1;
+				} else if (card) {
+					const res = await syncBlock(id, { fromReconcile: true, ankiLive: anki, mediaNames });
+					bumpSummary(summary, res.action);
+				}
+			} catch (e) {
+				summary.errors += 1;
+				const st = await getState();
+				if (st.cards[id]) {
+					st.cards[id].status = "error";
+					st.cards[id].error = e.message;
+					await setCards(st.cards);
+				}
+			}
+			job.summary = summary;
+			job.updatedAt = Date.now();
+			await chrome.storage.local.set({ [JOB_KEY]: job });
+		}
+	} finally {
+		NASNotion.endPass();
 	}
 
 	const queueRes = await processQueue();
 	summary.queuedProcessed = queueRes.processed || 0;
-	if (!summary.anki) summary.anki = Boolean(queueRes.anki);
-	return summary;
+	summary.anki = anki || Boolean(queueRes.anki);
+
+	await chrome.storage.local.remove(JOB_KEY);
+	await chrome.storage.local.set({ lastSync: { mode: job.mode, finishedAt: Date.now(), summary } });
+	return { ok: true, partial: false, summary };
 }
 
 function scheduleAlarm(intervalMinutes) {
 	const period = Math.max(5, Number(intervalMinutes) || 10);
 	chrome.alarms.create("nas-sync", { periodInMinutes: period });
+	chrome.alarms.create("nas-sync-deep", { periodInMinutes: 24 * 60 });
 }
 
 function isNotionUrl(url) {
@@ -488,6 +610,7 @@ chrome.runtime.onStartup.addListener(async () => {
 	injectAllNotionTabs();
 	await hydrateFromAnki(true);
 	await processQueue();
+	if (await getJob()) continueSyncJob();
 });
 
 chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
@@ -497,7 +620,15 @@ chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
 });
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
-	if (alarm.name === "nas-sync") await backgroundReconcile();
+	if (alarm.name === "nas-sync") {
+		const { settings } = await getState();
+		if (!settings.notionToken) return;
+		await runSyncJob("fast");
+	} else if (alarm.name === "nas-sync-deep") {
+		await runSyncJob("deep");
+	} else if (alarm.name === "nas-sync-continue") {
+		await continueSyncJob();
+	}
 });
 
 chrome.storage.onChanged.addListener((changes) => {
@@ -612,6 +743,7 @@ async function handleMessage(msg) {
 					deckName: st.settings.deckName,
 					intervalMinutes: st.settings.intervalMinutes,
 					hasToken: Boolean(st.settings.notionToken),
+					autoSync: st.settings.autoSync !== false,
 				},
 			};
 		}
@@ -673,10 +805,10 @@ async function handleMessage(msg) {
 			const ping = await NASAnki.ping(settings.ankiUrl);
 			return { ok: true, version: ping.version };
 		}
-		case "SYNC_ALL": {
-			const summary = await backgroundReconcile();
-			return { ok: true, summary };
-		}
+		case "SYNC_ALL":
+			return runSyncJob("deep");
+		case "SYNC_CHANGED":
+			return runSyncJob("fast");
 		case "PROCESS_QUEUE":
 			return { ok: true, ...(await processQueue()) };
 		case "FORGET_TAG":

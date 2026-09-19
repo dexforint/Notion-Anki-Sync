@@ -12,6 +12,7 @@ async function load() {
 	document.getElementById("deckName").value = s.deckName || "Default";
 	document.getElementById("tags").value = s.tags || "notion";
 	document.getElementById("intervalMinutes").value = s.intervalMinutes || 10;
+	document.getElementById("autoSync").checked = s.autoSync !== false;
 }
 
 document.getElementById("save").onclick = async () => {
@@ -21,6 +22,7 @@ document.getElementById("save").onclick = async () => {
 		deckName: document.getElementById("deckName").value.trim() || "Default",
 		tags: document.getElementById("tags").value.trim() || "notion",
 		intervalMinutes: Math.max(5, Number(document.getElementById("intervalMinutes").value) || 10),
+		autoSync: document.getElementById("autoSync").checked,
 	};
 	await chrome.storage.local.set({ settings });
 	try {

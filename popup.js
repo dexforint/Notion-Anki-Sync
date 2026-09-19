@@ -23,6 +23,7 @@ function formatSummary(summary) {
 	if (summary.created) lines.push(`Created: ${summary.created}`);
 	if (summary.updated) lines.push(`Updated: ${summary.updated}`);
 	if (summary.unchanged) lines.push(`Unchanged: ${summary.unchanged}`);
+	if (summary.skipped) lines.push(`Skipped (no changes): ${summary.skipped}`);
 	if (summary.deleted) lines.push(`Deleted in Notion: ${summary.deleted}`);
 	if (summary.orphaned) lines.push(`Removed (deleted in Anki): ${summary.orphaned}`);
 	if (summary.queued) lines.push(`Queued: ${summary.queued}`);
@@ -151,14 +152,13 @@ async function pingTab() {
 	}
 }
 
-$("syncAll").onclick = () => {
-	const btn = $("syncAll");
-	btn.disabled = true;
-	btn.textContent = "Syncing…";
-	setStatus("Syncing all tracked toggles…", "busy");
-	chrome.runtime.sendMessage({ type: "SYNC_ALL" }, (res) => {
-		btn.disabled = false;
-		btn.textContent = "Sync all now";
+function sendJob(type) {
+	const a = $("syncChanged");
+	const b = $("syncAll");
+	a.disabled = b.disabled = true;
+	setStatus(type === "SYNC_CHANGED" ? "Checking pages for changes…" : "Full re-sync started…", "busy");
+	chrome.runtime.sendMessage({ type }, (res) => {
+		a.disabled = b.disabled = false;
 		refreshState();
 		if (chrome.runtime.lastError) {
 			setStatus(chrome.runtime.lastError.message, "err");
@@ -168,9 +168,23 @@ $("syncAll").onclick = () => {
 			setStatus(res?.error || "Sync failed.", "err");
 			return;
 		}
-		setStatus(formatSummary(res.summary), summaryKind(res.summary));
+		if (res.partial) setStatus("Continues in the background. You can close this popup.", "busy");
+		else setStatus(formatSummary(res.summary), summaryKind(res.summary));
 	});
-};
+}
+
+function renderJob(job) {
+	if (!job) return;
+	const label = job.mode === "fast" ? "Updating changed" : "Full re-sync";
+	if (job.phase === "pages") {
+		setStatus(`${label}: checking pages…`, "busy");
+		return;
+	}
+	setStatus(job.total >= 30 ? `${label}… ${job.index}/${job.total}` : `${label}…`, "busy");
+}
+
+$("syncChanged").onclick = () => sendJob("SYNC_CHANGED");
+$("syncAll").onclick = () => sendJob("SYNC_ALL");
 
 $("cardSearch").addEventListener("input", renderCards);
 $("options").onclick = () => chrome.runtime.openOptionsPage();
@@ -198,8 +212,20 @@ $("inject").onclick = async () => {
 };
 
 chrome.storage.onChanged.addListener((changes, area) => {
-	if (area === "local" && changes.cards) refreshState();
+	if (area !== "local") return;
+	if (changes.cards) refreshState();
+	if (changes.syncJob) renderJob(changes.syncJob.newValue);
+	if (changes.lastSync) {
+		const v = changes.lastSync.newValue;
+		if (v?.summary) setStatus(formatSummary(v.summary), summaryKind(v.summary));
+	}
 });
 
 refreshState();
 pingTab();
+
+(async () => {
+	const { syncJob, lastSync } = await chrome.storage.local.get(["syncJob", "lastSync"]);
+	if (syncJob) renderJob(syncJob);
+	else if (lastSync?.summary) setStatus(formatSummary(lastSync.summary), summaryKind(lastSync.summary));
+})();

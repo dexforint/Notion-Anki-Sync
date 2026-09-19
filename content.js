@@ -62,6 +62,139 @@
 	let renamingFrom = "";
 	let tagMenuEl = null;
 
+	/* ---------- авто-обновление отслеживаемых блоков ---------- */
+	const AUTO_SYNC_DEBOUNCE_MS = 3500;
+	const AUTO_SYNC_COOLDOWN_MS = 8000;
+	let autoSyncEnabled = true; // подтягивается из настроек
+	const autoSyncTimers = new Map();
+	const autoSyncLastAt = new Map();
+	const autoSyncObservers = new Map(); // id -> { el, mo }
+
+	function findTrackedAncestorId(node) {
+		if (!node) return null;
+		let el = node;
+		if (el.nodeType !== 1) el = el.parentElement;
+		while (el && el !== document.documentElement) {
+			if (el.id === "nas-root" || el.id === "nas-handle-layer") return null;
+			const raw = extractBlockId(el);
+			if (raw) {
+				const id = normalizeBlockId(raw);
+				if (cardsCache[id]) return id;
+			}
+			el = el.parentElement;
+		}
+		return null;
+	}
+
+	function resolveEditTarget(ev) {
+		// 1) от цели события
+		let id = findTrackedAncestorId(ev?.target);
+		if (id) return id;
+		// 2) от composedPath (покрывает случаи, когда target уже detached)
+		try {
+			if (typeof ev?.composedPath === "function") {
+				for (const node of ev.composedPath()) {
+					id = findTrackedAncestorId(node);
+					if (id) return id;
+				}
+			}
+		} catch (_) {}
+		// 3) от активного элемента
+		const active = document.activeElement;
+		if (active && active !== document.body && active !== document.documentElement && !active.closest?.("#nas-root, #nas-handle-layer")) {
+			id = findTrackedAncestorId(active);
+			if (id) return id;
+		}
+		// 4) от якоря выделения
+		try {
+			const sel = window.getSelection();
+			const node = sel && (sel.anchorNode || sel.focusNode);
+			if (node) {
+				id = findTrackedAncestorId(node);
+				if (id) return id;
+			}
+		} catch (_) {}
+		return null;
+	}
+
+	function scheduleAutoSync(blockId) {
+		if (!autoSyncEnabled || !blockId || !cardsCache[blockId]) return;
+		if (pickerOpen && pickerEl?.dataset.blockId === blockId) return;
+		const now = Date.now();
+		const last = autoSyncLastAt.get(blockId) || 0;
+		const delay = Math.max(AUTO_SYNC_DEBOUNCE_MS, last + AUTO_SYNC_COOLDOWN_MS - now);
+		const prevTimer = autoSyncTimers.get(blockId);
+		if (prevTimer) clearTimeout(prevTimer);
+		const timer = setTimeout(() => {
+			autoSyncTimers.delete(blockId);
+			if (!autoSyncEnabled || !cardsCache[blockId]) return;
+			autoSyncLastAt.set(blockId, Date.now());
+			sendRuntimeMessage({ type: "SYNC", blockId, auto: true }, (res) => {
+				if (res?.ok && (res.action === "updated" || res.action === "created")) {
+					showToast(isRuUi() ? "Карточка обновлена" : "Card updated", "ok");
+				}
+				refreshState();
+			});
+		}, delay);
+		autoSyncTimers.set(blockId, timer);
+	}
+
+	function onBlockActivity(e) {
+		if (!autoSyncEnabled || !e?.target) return;
+		if (typeof e.target.closest === "function" && e.target.closest("#nas-root, #nas-handle-layer")) return;
+		const id = resolveEditTarget(e);
+		if (id) scheduleAutoSync(id);
+	}
+
+	// События, которые считаем «редактированием», покрывают почти всё:
+	// набор/удаление/вставка/вырезание/автозамена/Ctrl+Enter и т.п.
+	for (const type of ["input", "beforeinput", "compositionend", "paste", "cut", "drop"]) {
+		window.addEventListener(type, onBlockActivity, true);
+	}
+	window.addEventListener(
+		"keydown",
+		(e) => {
+			if (e.key === "Enter" || e.key === "Backspace" || e.key === "Delete") onBlockActivity(e);
+		},
+		true,
+	);
+
+	// Наблюдатель на сам отслеживаемый блок: ловит любые изменения внутри его поддерева
+	// независимо от того, как Notion устроил редакторы title/body.
+	function ensureAutoSyncObserver(id, el) {
+		if (!el) return;
+		const entry = autoSyncObservers.get(id);
+		if (entry && entry.el === el && entry.mo) return;
+		if (entry?.mo) {
+			try {
+				entry.mo.disconnect();
+			} catch (_) {}
+		}
+		const mo = new MutationObserver(() => {
+			if (autoSyncEnabled) scheduleAutoSync(id);
+		});
+		mo.observe(el, { subtree: true, childList: true, characterData: true, attributes: false });
+		autoSyncObservers.set(id, { el, mo });
+	}
+
+	function dropAutoSyncObserver(id) {
+		const entry = autoSyncObservers.get(id);
+		if (!entry) return;
+		try {
+			entry.mo.disconnect();
+		} catch (_) {}
+		autoSyncObservers.delete(id);
+	}
+
+	function dropAllAutoSyncObservers() {
+		for (const entry of autoSyncObservers.values()) {
+			try {
+				entry.mo.disconnect();
+			} catch (_) {}
+		}
+		autoSyncObservers.clear();
+	}
+
 	console.log("[NAS] content script loaded", location.href);
 
 	const root = document.createElement("div");
@@ -95,6 +228,9 @@
 	}
 
 	function shutdown() {
+		for (const t of autoSyncTimers.values()) clearTimeout(t);
+		autoSyncTimers.clear();
+		dropAllAutoSyncObservers();
 		try {
 			clearInterval(badgeTimer);
 		} catch (_) {}
@@ -889,8 +1025,9 @@
 		const used = new Set();
 		const titleId = pageTitleId();
 		for (const id of ids) {
-			if (titleId && id === titleId) continue;
 			const el = findBlockEl(id);
+			if (el && autoSyncEnabled) ensureAutoSyncObserver(id, el);
+			if (titleId && id === titleId) continue;
 			if (!el) continue;
 			const rect = el.getBoundingClientRect();
 			if (rect.width < 80 || rect.height < 16) continue;
@@ -915,6 +1052,10 @@
 				badgeMap.delete(id);
 			}
 		}
+		// Карточка отвязана или авто-синк выключен — снимаем наблюдателей.
+		for (const id of [...autoSyncObservers.keys()]) {
+			if (!cardsCache[id] || !autoSyncEnabled) dropAutoSyncObserver(id);
+		}
 	}
 
 	function requestBadges() {
@@ -925,6 +1066,7 @@
 		sendRuntimeMessage({ type: "GET_STATE" }, (res) => {
 			if (!res?.ok) return;
 			cardsCache = res.cards || {};
+			if (typeof res.settings?.autoSync === "boolean") autoSyncEnabled = res.settings.autoSync;
 			requestBadges();
 		});
 	}
@@ -938,6 +1080,18 @@
 		(e) => {
 			if (isInsidePicker(e.target)) return;
 			if (pickerOpen) hidePicker();
+		},
+		true,
+	);
+
+	document.addEventListener("input", onBlockActivity, true);
+	document.addEventListener("paste", onBlockActivity, true);
+	document.addEventListener("cut", onBlockActivity, true);
+	document.addEventListener(
+		"click",
+		(e) => {
+			if (!e.target?.closest?.('[role="checkbox"], input[type="checkbox"], .notion-checkbox')) return;
+			onBlockActivity(e);
 		},
 		true,
 	);
@@ -963,9 +1117,21 @@
 
 	try {
 		chrome.storage.onChanged.addListener((changes, area) => {
-			if (area === "local" && changes.cards) {
+			if (area !== "local") return;
+			if (changes.cards) {
 				cardsCache = changes.cards.newValue || {};
 				requestBadges();
+			}
+			if (changes.settings) {
+				const v = changes.settings.newValue || {};
+				if (typeof v.autoSync === "boolean" && v.autoSync !== autoSyncEnabled) {
+					autoSyncEnabled = v.autoSync;
+					if (!autoSyncEnabled) {
+						for (const t of autoSyncTimers.values()) clearTimeout(t);
+						autoSyncTimers.clear();
+					}
+					requestBadges();
+				}
 			}
 		});
 	} catch (_) {}
